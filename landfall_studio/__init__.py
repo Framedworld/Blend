@@ -18,14 +18,14 @@ try:
 except ImportError:  # Allow standalone Python CLI tools to import landfall_studio.bootstrap
     bpy = None
 
-from . import commands, diagnostics, keymaps, viewport
+from . import commands, diagnostics, keymaps, ui, viewport
 from .adapters import blendertk_bridge, landfall_bridge, tentacle_bridge, workspace_bridge
 from .bootstrap import deps, paths
 
 bl_info = {
     "name": "Landfall Studio",
     "author": "Framedworld",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar (N) > Landfall | Preferences > Add-ons > Landfall Studio",
     "description": "Unified Maya-oriented Blender environment (Landfall + Tentacle + blendertk)",
@@ -81,6 +81,7 @@ if bpy is not None:
                     custom_upstream_root=custom_upstream or None,
                     custom_deps_dir=result["target_dir"],
                 )
+                ui.register()
                 keymaps.apply_profile(context, profile)
 
             self.report(
@@ -137,6 +138,7 @@ if bpy is not None:
                         "Tentacle Qt dependencies are missing. Use 'Install Qt & Python Dependencies' in Preferences.",
                     )
                     return {"CANCELLED"}
+                ui.register()
 
             info = tentacle_bridge.show_window_for_test()
             if not info["visible"]:
@@ -199,11 +201,16 @@ if bpy is not None:
             return {"FINISHED"}
 
     STUDIO_CLASSES = (
-        LANDFALL_STUDIO_OT_install_dependencies,
-        LANDFALL_STUDIO_OT_diagnostics_report,
-        LANDFALL_STUDIO_OT_show_tentacle,
-        LANDFALL_STUDIO_OT_btk_create_primitive,
-    ) + viewport.VIEWPORT_CLASSES + keymaps.KEYMAP_CLASSES
+        (
+            LANDFALL_STUDIO_OT_install_dependencies,
+            LANDFALL_STUDIO_OT_diagnostics_report,
+            LANDFALL_STUDIO_OT_show_tentacle,
+            LANDFALL_STUDIO_OT_btk_create_primitive,
+        )
+        + viewport.VIEWPORT_CLASSES
+        + keymaps.KEYMAP_CLASSES
+        + ui.UI_CLASSES
+    )
 else:
     STUDIO_CLASSES = ()
 
@@ -211,11 +218,11 @@ _studio_registered = False
 
 
 def _draw_studio_preferences(prefs_self, context):
-    """Render Landfall Studio integration diagnostics, profile controls, and opt-in dependency controls in Preferences."""
+    """Render Landfall Studio integration diagnostics, profile controls, and Qt desktop controls in Preferences."""
     layout = prefs_self.layout
     box = layout.box()
     box.label(
-        text="Landfall Studio — Unified Maya Environment (Phase 02)",
+        text="Landfall Studio — Unified Maya Environment (Phase 03)",
         icon="PREFERENCES",
     )
 
@@ -271,10 +278,21 @@ def _draw_studio_preferences(prefs_self, context):
             text="Open Tentacle UI",
             icon="WINDOW",
         )
+        qt_row = box.row(align=True)
+        op_cb = qt_row.operator("landfall_studio.open_qt_panel", text="Channel Box")
+        op_cb.panel_id = "channels"
+        op_cb.dock = True
+        op_ws = qt_row.operator("landfall_studio.open_qt_panel", text="Workspace Editor")
+        op_ws.panel_id = "workspace_editor"
+        op_ws.dock = False
+        op_rm = qt_row.operator("landfall_studio.open_qt_panel", text="Reference Manager")
+        op_rm.panel_id = "reference_manager"
+        op_rm.dock = False
+        qt_row.operator("landfall_studio.toggle_script_output", text="Script Output")
 
 
 def register():
-    """Register Landfall Studio: upstream paths, Landfall viewport/tools, studio operators, Tentacle Qt host, and Maya profile."""
+    """Register Landfall Studio: upstream paths, Landfall viewport/tools, studio operators, Tentacle Qt host, UI desktop, and Maya profile."""
     global _studio_registered
     if _studio_registered:
         return
@@ -284,7 +302,7 @@ def register():
     # 1. Pre-flight check of paths and dependencies (never triggers pip install)
     dep_status = deps.check_dependencies()
 
-    # 2. Register Studio operators (bootstrap, viewport interaction, marking menus, keymap profile)
+    # 2. Register Studio operators (bootstrap, viewport interaction, marking menus, keymap profile, Qt UI desktop)
     for cls in STUDIO_CLASSES:
         bpy.utils.register_class(cls)
     viewport.register_marking_menu_handlers()
@@ -322,7 +340,10 @@ def register():
             auto_restore_script_console=auto_console,
         )
 
-    # 5. Apply interaction profile (MAYA by default) and initialize persistent Move gizmo
+    # 5. Register unified Qt window desktop & workspace integration
+    ui.register()
+
+    # 6. Apply interaction profile (MAYA by default) and initialize persistent Move gizmo
     keymaps.apply_profile(bpy.context, profile=profile)
     commands.set_active_tool("TRANSLATE", axis="X")
     viewport.apply_gizmo_for_tool(bpy.context, "TRANSLATE")
@@ -331,7 +352,7 @@ def register():
 
 
 def unregister():
-    """Unregister Landfall Studio and restore all Blender theme, viewport, keymap, handler, and timer states."""
+    """Unregister Landfall Studio and restore all Blender theme, viewport, keymap, Qt desktop, handler, and timer states."""
     global _studio_registered
     if not _studio_registered:
         return
@@ -342,26 +363,32 @@ def unregister():
     except Exception as exc:
         print(f"[landfall_studio] keymaps unregister warning: {exc}")
 
-    # 2. Stop any open Studio marking menu draw handlers and clear command state
+    # 2. Tear down unified Qt window desktop & right dock before tearing down Tentacle QApplication
+    try:
+        ui.unregister()
+    except Exception as exc:
+        print(f"[landfall_studio] ui unregister warning: {exc}")
+
+    # 3. Stop any open Studio marking menu draw handlers and clear command state
     try:
         viewport.unregister_marking_menu_handlers()
         commands.clear_state()
     except Exception as exc:
         print(f"[landfall_studio] viewport/commands unregister warning: {exc}")
 
-    # 3. Tear down Tentacle Qt host, pollers, keymaps, SelectionOrder, and ScriptConsole
+    # 4. Tear down Tentacle Qt host, pollers, keymaps, SelectionOrder, and ScriptConsole
     try:
         tentacle_bridge.unregister()
     except Exception as exc:
         print(f"[landfall_studio] tentacle_bridge unregister warning: {exc}")
 
-    # 4. Tear down upstream Landfall (restores theme, viewport grid, navigation prefs, draw handlers, timers, keymaps)
+    # 5. Tear down upstream Landfall (restores theme, viewport grid, navigation prefs, draw handlers, timers, keymaps)
     try:
         landfall_bridge.unregister()
     except Exception as exc:
         print(f"[landfall_studio] landfall_bridge unregister warning: {exc}")
 
-    # 5. Unregister Studio operators
+    # 6. Unregister Studio operators
     for cls in reversed(STUDIO_CLASSES):
         try:
             bpy.utils.unregister_class(cls)
@@ -369,4 +396,5 @@ def unregister():
             pass
 
     _studio_registered = False
+
 

@@ -6,6 +6,7 @@ import platform
 import sys
 from typing import Any, Dict, Optional
 
+from . import ui
 from .adapters import landfall_bridge, tentacle_bridge, workspace_bridge
 from .bootstrap.deps import check_dependencies
 
@@ -43,6 +44,8 @@ def get_report(
         custom_deps_dir=custom_deps_dir,
     )
 
+    ui_state = ui.get_registry_state()
+
     return {
         "blender": blender_info,
         "python": {
@@ -59,6 +62,8 @@ def get_report(
             "tentacle_state": tentacle_bridge.get_state(),
             "tentacle_instance_active": tentacle_bridge.get_tcl_instance() is not None,
             "workspace_root": workspace_bridge.get_project_root(),
+            "qt_desktop_registered": ui_state["registered"],
+            "right_dock_mode": ui_state["right_dock"]["mode"],
         },
     }
 
@@ -96,6 +101,7 @@ def format_report(report: Optional[Dict[str, Any]] = None) -> str:
             "--- Subsystems ---",
             f"  Landfall Registered : {sub['landfall_registered']}",
             f"  Tentacle State      : {sub['tentacle_state']} (instance={sub['tentacle_instance_active']})",
+            f"  Qt Desktop Ready    : {sub.get('qt_desktop_registered')} (right_dock={sub.get('right_dock_mode')})",
             f"  Workspace Root      : {sub['workspace_root'] or '<not set>'}",
             "===================================",
         ]

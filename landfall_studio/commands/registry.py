@@ -118,6 +118,18 @@ def record_command(
     _command_history.append(entry)
     if len(_command_history) > MAX_HISTORY:
         del _command_history[:-MAX_HISTORY]
+
+    try:
+        from .. import ui
+
+        ui.set_command_feedback(
+            command=entry["id"],
+            result=entry["label"],
+            level="INFO",
+        )
+    except Exception:
+        pass
+
     return entry
 
 
@@ -175,6 +187,16 @@ def repeat_last_command() -> Dict[str, Any]:
             res = fn(**kwargs)
             # Re-stamp timestamp on repeat
             last["timestamp"] = time.monotonic()
+            try:
+                from .. import ui
+
+                ui.set_command_feedback(
+                    command=f"repeatLast ({cmd_id})",
+                    result=last.get("label", cmd_id),
+                    level="INFO",
+                )
+            except Exception:
+                pass
             return {
                 "ok": True,
                 "source": "studio_registry",

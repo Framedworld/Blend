@@ -541,6 +541,32 @@ def apply_profile(context=None, profile: str = "MAYA") -> Dict[str, Any]:
                 "PRESS",
             )
 
+            # Ctrl+A -> Cycle Channel Box / Attribute Editor (Maya Classic right-dock toggle)
+            _queue_mute(km_name, "A", ctrl=True)
+            _add_kmi(
+                kc,
+                km_name,
+                space_type,
+                "landfall_studio.cycle_attribute_channels",
+                "A",
+                "PRESS",
+                ctrl=True,
+                props={"mode": "CYCLE"},
+            )
+
+        # Also bind Ctrl+A in 3D View so it works in any 3D View mode
+        _queue_mute("3D View", "A", ctrl=True)
+        _add_kmi(
+            kc,
+            "3D View",
+            "VIEW_3D",
+            "landfall_studio.cycle_attribute_channels",
+            "A",
+            "PRESS",
+            ctrl=True,
+            props={"mode": "CYCLE"},
+        )
+
         # Ctrl+E in Mesh Edit Mode -> Landfall Extrude with Maya options
         _queue_mute("Mesh", "E", ctrl=True)
         _add_kmi(
