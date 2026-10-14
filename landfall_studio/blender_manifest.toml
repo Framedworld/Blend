@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "landfall_studio"
+version = "0.1.0"
+name = "Landfall Studio"
+tagline = "Unified Maya-oriented Blender environment combining Landfall, Tentacle, and blendertk"
+maintainer = "Framedworld"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
