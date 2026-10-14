@@ -80,6 +80,28 @@ def register(
 
     bpy.app.timers.register = _tracking_timer_register
     try:
+        # Ensure _KeymapBridge._vk_for_key supports multi-letter keys like Key_Space (0x20) on Windows
+        if sys.platform == "win32" and not getattr(
+            tcl_blender._KeymapBridge, "_studio_vk_patched", False
+        ):
+            orig_vk_for_key = tcl_blender._KeymapBridge._vk_for_key
+            extra_vk_map = {
+                "SPACE": 0x20,
+                "TAB": 0x09,
+                "ACCENT_GRAVE": 0xC0,
+                "QUOTELEFT": 0xC0,
+            }
+
+            def _studio_vk_for_key(ks):
+                res = orig_vk_for_key(ks)
+                if res is not None:
+                    return res
+                norm_name = (ks or "").replace("Key_", "").upper()
+                return extra_vk_map.get(norm_name)
+
+            tcl_blender._KeymapBridge._vk_for_key = staticmethod(_studio_vk_for_key)
+            tcl_blender._KeymapBridge._studio_vk_patched = True
+
         app = tcl_blender._QtHost.ensure_qapp()
         tcl_blender._QtHost.ensure_widget(app)
         tcl_blender._QtHost.start_pump(app)
@@ -89,6 +111,7 @@ def register(
 
         if tcl_blender._KeymapBridge.tcl is not None:
             _tcl_instance = tcl_blender._KeymapBridge.tcl
+            set_activation_key(key_show)
         else:
             _tcl_instance = tcl_blender.TclBlender(key_show=key_show)
     finally:
@@ -102,6 +125,41 @@ def register(
         "state": _tentacle_state,
         "tcl_class": type(_tcl_instance).__name__ if _tcl_instance is not None else None,
         "key_show": key_show,
+    }
+
+
+def set_activation_key(key_show: str) -> bool:
+    """Rebind the live Tentacle instance's activation key (both Qt chord table and Blender 3D View keymap)."""
+    if _tcl_instance is None:
+        return False
+    tb_mod = sys.modules.get("tentacle.tcl_blender")
+    qt_key = key_show if key_show.startswith("Key_") else f"Key_{key_show.capitalize() if len(key_show) > 1 and not (key_show[0].upper() == 'F' and key_show[1:].isdigit()) else key_show.upper()}"
+    try:
+        _tcl_instance.set_activation_key(qt_key)
+        if tb_mod is not None:
+            tb_mod._KeymapBridge.rebind(_tcl_instance, qt_key)
+        return True
+    except Exception as exc:
+        print(f"[landfall_studio] set_activation_key({qt_key}) warning: {exc}")
+        return False
+
+
+def get_activation_key_info() -> Dict[str, Any]:
+    """Return diagnostic details on Tentacle's current Blender & Qt activation key binding."""
+    tb_mod = sys.modules.get("tentacle.tcl_blender")
+    if tb_mod is None or _tcl_instance is None:
+        return {
+            "active": False,
+            "addon_key_type": None,
+            "active_vk": None,
+            "qt_key": None,
+        }
+    return {
+        "active": True,
+        "addon_key_type": tb_mod._KeymapBridge.addon_key_type(),
+        "active_vk": tb_mod._KeymapBridge.active_vk,
+        "qt_key": getattr(_tcl_instance, "_activation_key_str", None),
+        "keymap_count": len(tb_mod._KeymapBridge.keymaps),
     }
 
 

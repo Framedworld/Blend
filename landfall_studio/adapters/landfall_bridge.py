@@ -48,6 +48,7 @@ class _FallbackLandfallPrefs:
         self.enable_tentacle = True
         self.tentacle_key = "Z"
         self.auto_restore_script_console = False
+        self.interaction_profile = "MAYA"
 
 
 def get_module() -> Optional[ModuleType]:
@@ -113,14 +114,23 @@ def load_upstream_landfall(
             default=True,
         )
         annotations["tentacle_key"] = bpy.props.StringProperty(
-            name="Tentacle Activation Key",
-            description="Default activation key for Tentacle marking menu in 3D View",
+            name="Tentacle Activation Key (Hybrid Mode)",
+            description="Activation key for Tentacle marking menu in Hybrid mode (Maya mode uses Space)",
             default="Z",
         )
         annotations["auto_restore_script_console"] = bpy.props.BoolProperty(
             name="Auto-Restore blendertk Script Output Console",
             description="Automatically restore the docked Qt Script Output console on startup",
             default=False,
+        )
+        annotations["interaction_profile"] = bpy.props.EnumProperty(
+            name="Interaction Profile",
+            description="Choose between full Maya interaction profile and Hybrid Blender/Maya profile",
+            items=(
+                ("MAYA", "Maya", "Full Maya muscle-memory profile (Q/W/E/R, 1/2/3, Space hotbox, RMB/Shift+RMB/Ctrl+RMB menus)"),
+                ("HYBRID", "Hybrid", "Landfall/Blender hybrid profile (G/R/S gizmos, Alt+1/2/3 smooth, Ctrl+Tab menu, Z hotbox)"),
+            ),
+            default="MAYA",
         )
         prefs_cls.__annotations__ = annotations
 
@@ -162,6 +172,23 @@ def load_upstream_landfall(
                 pass
 
         module._apply_project = _wrapped_apply_project
+
+    # Wrap _reapply_mutes so any keymap heal pass preserves the active Studio interaction profile
+    if hasattr(module, "_reapply_mutes"):
+        orig_reapply_mutes = module._reapply_mutes
+
+        def _wrapped_reapply_mutes():
+            orig_reapply_mutes()
+            try:
+                import bpy
+                from .. import keymaps
+
+                if _registered:
+                    keymaps.apply_profile(bpy.context, keymaps.get_active_profile())
+            except Exception:
+                pass
+
+        module._reapply_mutes = _wrapped_reapply_mutes
 
     _landfall_module = module
     return module
