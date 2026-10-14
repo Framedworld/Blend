@@ -25,7 +25,7 @@ from .bootstrap import deps, paths
 bl_info = {
     "name": "Landfall Studio",
     "author": "Framedworld",
-    "version": (0, 3, 0),
+    "version": (0, 4, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar (N) > Landfall | Preferences > Add-ons > Landfall Studio",
     "description": "Unified Maya-oriented Blender environment (Landfall + Tentacle + blendertk)",
@@ -183,6 +183,17 @@ if bpy is not None:
                 self.report({"ERROR"}, str(exc))
                 return {"CANCELLED"}
 
+            active_obj = getattr(context.view_layer.objects, "active", None)
+            if active_obj is not None:
+                ui.attach_primitive_history(
+                    active_obj,
+                    prim_type=prim_type,
+                    width=prim_size,
+                    height=prim_size,
+                    depth=prim_size,
+                    radius=prim_size * 0.5,
+                )
+
             # Record in unified Studio command history so 'G' repeats primitive creation
             commands.record_command(
                 cmd_id="landfall_studio.btk_create_primitive",
@@ -222,7 +233,7 @@ def _draw_studio_preferences(prefs_self, context):
     layout = prefs_self.layout
     box = layout.box()
     box.label(
-        text="Landfall Studio — Unified Maya Environment (Phase 03)",
+        text="Landfall Studio — Unified Maya Environment (Phase 04)",
         icon="PREFERENCES",
     )
 
@@ -281,13 +292,13 @@ def _draw_studio_preferences(prefs_self, context):
         qt_row = box.row(align=True)
         op_cb = qt_row.operator("landfall_studio.open_qt_panel", text="Channel Box")
         op_cb.panel_id = "channels"
-        op_cb.dock = True
+        op_cb.docked = True
         op_ws = qt_row.operator("landfall_studio.open_qt_panel", text="Workspace Editor")
         op_ws.panel_id = "workspace_editor"
-        op_ws.dock = False
+        op_ws.docked = False
         op_rm = qt_row.operator("landfall_studio.open_qt_panel", text="Reference Manager")
         op_rm.panel_id = "reference_manager"
-        op_rm.dock = False
+        op_rm.docked = False
         qt_row.operator("landfall_studio.toggle_script_output", text="Script Output")
 
 
@@ -306,6 +317,7 @@ def register():
     for cls in STUDIO_CLASSES:
         bpy.utils.register_class(cls)
     viewport.register_marking_menu_handlers()
+    viewport.register_hud_handler()
 
     # 3. Register pinned upstream Landfall (theme, finite grid, smooth cage, border edges, gizmos, navigation)
     landfall_bridge.register(
@@ -369,8 +381,9 @@ def unregister():
     except Exception as exc:
         print(f"[landfall_studio] ui unregister warning: {exc}")
 
-    # 3. Stop any open Studio marking menu draw handlers and clear command state
+    # 3. Stop any open Studio marking menu & HUD draw handlers and clear command state
     try:
+        viewport.unregister_hud_handler()
         viewport.unregister_marking_menu_handlers()
         commands.clear_state()
     except Exception as exc:

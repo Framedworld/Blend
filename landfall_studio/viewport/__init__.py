@@ -1,5 +1,12 @@
 """Viewport interaction and marking menu modules for Landfall Studio."""
 
+from .hud import (
+    compute_poly_count_stats,
+    get_hud_state,
+    register_hud_handler,
+    set_hud_enabled,
+    unregister_hud_handler,
+)
 from .interaction import (
     INTERACTION_CLASSES,
     apply_gizmo_for_tool,
@@ -25,12 +32,17 @@ __all__ = [
     "VIEWPORT_CLASSES",
     "apply_gizmo_for_tool",
     "compute_pivot_snap_target",
+    "compute_poly_count_stats",
     "find_view3d_area_region",
+    "get_hud_state",
     "get_marking_menu_state",
     "get_pivot_modal_state",
     "raycast_mesh_at_region_xy",
+    "register_hud_handler",
     "register_marking_menu_handlers",
+    "set_hud_enabled",
     "snap_object_pivot_world",
     "stop_studio_marking_menu",
+    "unregister_hud_handler",
     "unregister_marking_menu_handlers",
 ]

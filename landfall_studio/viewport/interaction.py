@@ -904,21 +904,49 @@ class LANDFALL_STUDIO_OT_temp_snap_modal(bpy.types.Operator):
 
 
 class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
-    """Maya-style open-viewport MMB virtual slider along the active manipulator axis."""
+    """Maya-style open-viewport MMB virtual slider along selected Channel Box attributes or active manipulator axis."""
 
     bl_idname = "landfall_studio.mmb_virtual_slider"
     bl_label = "MMB Virtual Slider"
-    bl_description = "Drag MMB in the viewport to scrub the active Move, Rotate, or Scale axis"
+    bl_description = "Drag MMB in the viewport to scrub selected Channel Box attributes or the active Move/Rotate/Scale axis"
     bl_options = {"REGISTER", "UNDO"}
 
     delta: bpy.props.FloatProperty(
         name="Delta",
         default=0.0,
-        description="Transform delta along active axis",
+        description="Transform or channel delta",
+        options={"SKIP_SAVE"},
+    )
+    prefer_channel_box: bpy.props.BoolProperty(
+        name="Prefer Channel Box Selection",
+        default=True,
+        description="If channels are highlighted in the Channel Box, scrub them across selected objects",
         options={"SKIP_SAVE"},
     )
 
+    def _has_selected_channels(self) -> bool:
+        if not self.prefer_channel_box:
+            return False
+        try:
+            from ..ui import channel_box_ext
+
+            if channel_box_ext._selected_input_target is not None:
+                return True
+            return len(channel_box_ext.get_selected_channel_names()) > 0
+        except Exception:
+            return False
+
     def _apply_delta(self, context, delta_val: float):
+        if self._has_selected_channels():
+            try:
+                from ..ui import channel_box_ext
+
+                res = channel_box_ext.scrub_selected_channels(delta_val)
+                if res.get("ok"):
+                    return
+            except Exception:
+                pass
+
         tool = cmd_registry.get_active_tool()
         axis = cmd_registry.get_active_axis()
         idx = {"X": 0, "Y": 1, "Z": 2}.get(axis, 0)
@@ -950,14 +978,15 @@ class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
 
     def execute(self, context):
         tool = cmd_registry.get_active_tool()
-        if tool == "SELECT":
+        if tool == "SELECT" and not self._has_selected_channels():
             return {"CANCELLED"}
         self._apply_delta(context, self.delta)
         return {"FINISHED"}
 
     def invoke(self, context, event):
         tool = cmd_registry.get_active_tool()
-        if tool == "SELECT" or context.area is None or context.area.type != "VIEW_3D":
+        has_cb = self._has_selected_channels()
+        if (tool == "SELECT" and not has_cb) or context.area is None or context.area.type != "VIEW_3D":
             return {"PASS_THROUGH"}
 
         targets = list(context.selected_objects)
