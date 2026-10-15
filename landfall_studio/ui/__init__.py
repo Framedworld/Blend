@@ -6,6 +6,7 @@ from . import (
     attribute_editor,
     channel_box_ext,
     icons,
+    modeling_toolkit,
     outliner,
     shelf,
     style,
@@ -80,6 +81,10 @@ from .hotkey_passthrough import (
     is_filter_installed,
     uninstall_hotkey_filter,
 )
+from .modeling_toolkit import (
+    get_modeling_toolkit_snapshot,
+    refresh_modeling_toolkit_widgets,
+)
 from .outliner import (
     get_dag_outliner_snapshot,
     get_left_outliner_dock,
@@ -91,6 +96,7 @@ from .shelf import (
     SHELF_TABS,
     execute_shelf_item,
     open_tool_settings_for_shelf_item,
+    refresh_top_shelf_status,
 )
 from .tool_settings import (
     apply_current_tool_option_box,
@@ -134,6 +140,7 @@ __all__ = [
     "get_hotkey_filter",
     "get_last_passthrough_event",
     "get_left_outliner_dock",
+    "get_modeling_toolkit_snapshot",
     "get_object_inputs",
     "get_object_shape_info",
     "get_panel_widget_and_slots",
@@ -148,9 +155,12 @@ __all__ = [
     "is_filter_installed",
     "list_display_layers",
     "minimize_panel",
+    "modeling_toolkit",
     "open_panel",
     "open_tool_settings_for_shelf_item",
     "outliner",
+    "refresh_modeling_toolkit_widgets",
+    "refresh_top_shelf_status",
     "register",
     "rename_object_shape",
     "reparent_preserve_world",

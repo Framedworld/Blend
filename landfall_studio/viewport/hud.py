@@ -143,6 +143,22 @@ def compute_poly_count_stats(context: Any = None) -> Dict[str, Any]:
     }
     tool_label = tool_map.get(cmd_registry.get_active_tool(), "Move (X)")
 
+    # Query Modeling state (Make Live, In-Viewport Caddy, Quad Draw)
+    live_name = ""
+    live_active = False
+    caddy_state: Dict[str, Any] = {"open": False}
+    qd_state: Dict[str, Any] = {"active": False, "dots": []}
+    try:
+        from .. import modeling
+
+        ls = modeling.get_live_surface_state()
+        live_active = bool(ls.get("active"))
+        live_name = str(ls.get("object_name") or "")
+        caddy_state = modeling.get_active_caddy_state()
+        qd_state = modeling.get_quad_draw_overlay_data()
+    except Exception:
+        pass
+
     _last_hud_stats.update(
         {
             "enabled": _hud_enabled,
@@ -159,13 +175,21 @@ def compute_poly_count_stats(context: Any = None) -> Dict[str, Any]:
             "camera_label": cam_label,
             "mode_label": mode_label,
             "tool_label": tool_label,
+            "live_surface_active": live_active,
+            "live_surface_name": live_name,
+            "caddy_open": bool(caddy_state.get("open")),
+            "caddy_tool_id": caddy_state.get("tool_id", ""),
+            "caddy_node_title": caddy_state.get("node_title", ""),
+            "caddy_values": dict(caddy_state.get("values", {})),
+            "quad_draw_active": bool(qd_state.get("active")),
+            "quad_draw_dot_count": len(qd_state.get("dots", [])),
         }
     )
     return dict(_last_hud_stats)
 
 
 def get_hud_state(context: Any = None) -> Dict[str, Any]:
-    """Return the latest Poly Count & Viewport HUD state dictionary."""
+    """Return the latest Poly Count, Live Surface, Caddy, & Viewport HUD state dictionary."""
     return compute_poly_count_stats(context)
 
 
@@ -185,6 +209,13 @@ def _draw_rect_2d(shader, x: float, y: float, w: float, h: float, color):
     shader.bind()
     shader.uniform_float("color", color)
     batch.draw(shader)
+
+
+def _draw_border_2d(shader, x: float, y: float, w: float, h: float, thickness: float, color):
+    _draw_rect_2d(shader, x, y + h - thickness, w, thickness, color)
+    _draw_rect_2d(shader, x, y, w, thickness, color)
+    _draw_rect_2d(shader, x, y, thickness, h, color)
+    _draw_rect_2d(shader, x + w - thickness, y, thickness, h, color)
 
 
 def _draw_maya_hud_callback():
@@ -213,7 +244,6 @@ def _draw_maya_hud_callback():
     gpu.state.blend_set("ALPHA")
 
     # 1. Top-Left Maya Poly Count HUD block
-    # Offset past left TOOLS region if open so HUD never overlaps toolbar buttons
     tools_w = 0.0
     try:
         area = getattr(context, "area", None)
@@ -223,12 +253,12 @@ def _draw_maya_hud_callback():
                     tools_w = max(tools_w, float(reg.width))
     except Exception:
         pass
-    pad_x = tools_w + 14.0
-    top_y = rh - 22.0
+    pad_x = tools_w + 18.0
+    top_y = rh - 50.0
     box_w = 178.0
     box_h = 92.0
-    _draw_rect_2d(shader, pad_x - 6, top_y - box_h + 14, box_w, box_h, (0.08, 0.09, 0.11, 0.62))
-    _draw_rect_2d(shader, pad_x - 6, top_y - box_h + 14, 2.5, box_h, (0.22, 0.64, 0.85, 0.90))
+    _draw_rect_2d(shader, pad_x - 6, top_y - box_h + 14, box_w, box_h, (0.08, 0.09, 0.11, 0.68))
+    _draw_rect_2d(shader, pad_x - 6, top_y - box_h + 14, 2.5, box_h, (0.22, 0.64, 0.85, 0.92))
 
     font_id = 0
     blf.size(font_id, 11)
@@ -242,32 +272,162 @@ def _draw_maya_hud_callback():
     )
     for idx, (label, tot_val, sel_val) in enumerate(rows):
         ry = top_y - idx * 15.5
-        # Maya green label
         blf.color(font_id, 0.45, 0.84, 0.56, 0.95)
         blf.position(font_id, pad_x + 2, ry, 0)
         blf.draw(font_id, label)
-        # Scene total column
         blf.color(font_id, 0.88, 0.91, 0.95, 0.95)
         blf.position(font_id, pad_x + 62, ry, 0)
         blf.draw(font_id, str(tot_val))
-        # Selection column (Maya cyan-teal)
         blf.color(font_id, 0.34, 0.76, 0.96, 0.98)
         blf.position(font_id, pad_x + 118, ry, 0)
         blf.draw(font_id, str(sel_val))
 
-    # 2. Top-Center Active Mode & Manipulator Pill
+    # 2. Top-Center Active Mode & Manipulator Pill + Make Live Badge
     badge_text = f"{stats['mode_label']}   |   {stats['tool_label']}"
+    if stats.get("quad_draw_active"):
+        badge_text += "   |   Quad Draw"
     blf.size(font_id, 11)
     tw, th = blf.dimensions(font_id, badge_text)
     bx = (rw - tw) * 0.5 - 12.0
     by = rh - 38.0
-    _draw_rect_2d(shader, bx, by - 5.0, tw + 24.0, 20.0, (0.09, 0.11, 0.13, 0.72))
+    _draw_rect_2d(shader, bx, by - 5.0, tw + 24.0, 20.0, (0.09, 0.11, 0.13, 0.78))
     _draw_rect_2d(shader, bx, by + 13.5, tw + 24.0, 1.5, (0.22, 0.64, 0.85, 0.90))
     blf.color(font_id, 0.86, 0.90, 0.95, 0.95)
     blf.position(font_id, bx + 12.0, by, 0)
     blf.draw(font_id, badge_text)
 
-    # 3. Bottom-Center Maya Camera Label ('persp')
+    if stats.get("live_surface_active") and stats.get("live_surface_name"):
+        live_txt = f"LIVE SURFACE: {stats['live_surface_name']}"
+        blf.size(font_id, 10.5)
+        lw, _ = blf.dimensions(font_id, live_txt)
+        lx = (rw - lw) * 0.5 - 10.0
+        ly = by - 24.0
+        _draw_rect_2d(shader, lx, ly - 4.0, lw + 20.0, 18.0, (0.06, 0.22, 0.15, 0.86))
+        _draw_border_2d(shader, lx, ly - 4.0, lw + 20.0, 18.0, 1.0, (0.22, 0.85, 0.52, 0.92))
+        blf.color(font_id, 0.36, 0.95, 0.62, 1.0)
+        blf.position(font_id, lx + 10.0, ly, 0)
+        blf.draw(font_id, live_txt)
+
+    # 3. Quad Draw Plotted Construction Dots in 3D Viewport
+    try:
+        from .. import modeling
+        from bpy_extras.view3d_utils import location_3d_to_region_2d
+
+        qd = modeling.get_quad_draw_overlay_data()
+        r3d = getattr(space, "region_3d", None)
+        dots = qd.get("dots", [])
+        if r3d is not None and dots:
+            for d_idx, pt_item in enumerate(dots):
+                pt3 = pt_item["location"] if isinstance(pt_item, dict) else pt_item
+                co2d = location_3d_to_region_2d(region, r3d, pt3)
+                if co2d is not None:
+                    dx, dy = float(co2d[0]), float(co2d[1])
+                    # Outer dark halo + inner glowing cyan/emerald dot
+                    _draw_rect_2d(shader, dx - 5.5, dy - 5.5, 11.0, 11.0, (0.04, 0.11, 0.15, 0.94))
+                    _draw_rect_2d(shader, dx - 3.8, dy - 3.8, 7.6, 7.6, (0.18, 0.92, 0.72, 0.98))
+                    blf.size(font_id, 9.5)
+                    blf.color(font_id, 0.75, 0.98, 0.90, 0.98)
+                    blf.position(font_id, dx + 7.5, dy - 3.0, 0)
+                    blf.draw(font_id, f"v{d_idx + 1}")
+    except Exception:
+        pass
+
+    # 4. Maya In-Viewport Heads-Up Caddy (polyExtrudeFace1 / polyBevel1 / polyBridgeEdge1 / polyConnectComponents1)
+    try:
+        from .. import modeling
+
+        caddy = modeling.get_active_caddy_state()
+        if caddy.get("open"):
+            rows_list = caddy.get("rows", [])
+            node_title = str(caddy.get("node_title") or caddy.get("tool") or "polyCaddy1")
+
+            cw_box = 242.0
+            row_h = 22.0
+            header_h = 24.0
+            footer_h = 18.0
+            ch_box = header_h + len(rows_list) * row_h + footer_h + 8.0
+
+            # Position in lower-right quadrant of viewport (just like Maya's floating In-View Editor caddy)
+            cx_box = min(max(pad_x + 40.0, rw * 0.56), rw - cw_box - 22.0)
+            cy_box = max(48.0, rh * 0.22)
+
+            # Drop shadow & main card body
+            _draw_rect_2d(shader, cx_box + 3.0, cy_box - 3.0, cw_box, ch_box, (0.02, 0.03, 0.04, 0.58))
+            _draw_rect_2d(shader, cx_box, cy_box, cw_box, ch_box, (0.10, 0.115, 0.135, 0.94))
+            _draw_border_2d(shader, cx_box, cy_box, cw_box, ch_box, 1.0, (0.28, 0.58, 0.82, 0.88))
+
+            # Top header bar
+            hy = cy_box + ch_box - header_h
+            _draw_rect_2d(shader, cx_box, hy, cw_box, header_h, (0.15, 0.24, 0.34, 0.96))
+            _draw_rect_2d(shader, cx_box, hy + header_h - 2.0, cw_box, 2.0, (0.26, 0.68, 0.94, 1.0))
+
+            blf.size(font_id, 11)
+            blf.color(font_id, 0.92, 0.96, 1.0, 1.0)
+            blf.position(font_id, cx_box + 10.0, hy + 6.0, 0)
+            blf.draw(font_id, node_title)
+
+            obj_tag = str(caddy.get("object_name") or "")
+            if obj_tag:
+                blf.size(font_id, 9.5)
+                otw, _ = blf.dimensions(font_id, obj_tag)
+                blf.color(font_id, 0.56, 0.78, 0.94, 0.92)
+                blf.position(font_id, cx_box + cw_box - otw - 8.0, hy + 6.5, 0)
+                blf.draw(font_id, obj_tag)
+
+            # Parameter rows with visual scrub bar
+            for p_idx, rspec in enumerate(rows_list):
+                py = hy - (p_idx + 1) * row_h - 2.0
+                plabel = str(rspec.get("label", rspec.get("key", "")))
+                ptype = str(rspec.get("type", "float"))
+                pval = rspec.get("value", 0.0)
+                fill_ratio = max(0.0, min(1.0, float(rspec.get("ratio", 0.0))))
+                is_active = bool(rspec.get("active", p_idx == 0))
+
+                if is_active:
+                    _draw_rect_2d(shader, cx_box + 4.0, py, cw_box - 8.0, row_h - 2.0, (0.18, 0.32, 0.46, 0.65))
+                    _draw_rect_2d(shader, cx_box + 4.0, py, 2.5, row_h - 2.0, (0.32, 0.78, 0.98, 1.0))
+                else:
+                    _draw_rect_2d(shader, cx_box + 4.0, py, cw_box - 8.0, row_h - 2.0, (0.08, 0.09, 0.11, 0.55))
+
+                # Value fill bar on right half
+                bar_x = cx_box + 122.0
+                bar_w = cw_box - 130.0
+                _draw_rect_2d(shader, bar_x, py + 2.0, bar_w, row_h - 6.0, (0.06, 0.07, 0.08, 0.85))
+                if fill_ratio > 0.01:
+                    _draw_rect_2d(
+                        shader,
+                        bar_x,
+                        py + 2.0,
+                        bar_w * fill_ratio,
+                        row_h - 6.0,
+                        (0.22, 0.58, 0.84, 0.58) if is_active else (0.18, 0.44, 0.64, 0.42),
+                    )
+
+                blf.size(font_id, 10.5)
+                blf.color(font_id, 0.86, 0.90, 0.95, 0.98 if is_active else 0.85)
+                blf.position(font_id, cx_box + 11.0, py + 5.0, 0)
+                blf.draw(font_id, plabel)
+
+                if ptype == "bool":
+                    val_txt = "On" if pval else "Off"
+                elif ptype == "int":
+                    val_txt = str(int(round(float(pval))))
+                else:
+                    val_txt = f"{float(pval):.3f}"
+                vw, _ = blf.dimensions(font_id, val_txt)
+                blf.color(font_id, 0.42, 0.86, 1.0, 1.0) if is_active else blf.color(font_id, 0.82, 0.88, 0.94, 0.92)
+                blf.position(font_id, bar_x + bar_w - vw - 6.0, py + 5.0, 0)
+                blf.draw(font_id, val_txt)
+
+            # Footer hint
+            blf.size(font_id, 9.0)
+            blf.color(font_id, 0.55, 0.64, 0.72, 0.88)
+            blf.position(font_id, cx_box + 10.0, cy_box + 5.0, 0)
+            blf.draw(font_id, "MMB Scrub  |  Up/Down Row  |  Enter Commit")
+    except Exception:
+        pass
+
+    # 5. Bottom-Center Maya Camera Label ('persp')
     cam_txt = str(stats["camera_label"])
     blf.size(font_id, 11)
     cw, _ = blf.dimensions(font_id, cam_txt)

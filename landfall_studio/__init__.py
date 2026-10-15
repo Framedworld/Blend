@@ -18,14 +18,14 @@ try:
 except ImportError:  # Allow standalone Python CLI tools to import landfall_studio.bootstrap
     bpy = None
 
-from . import commands, diagnostics, keymaps, ui, viewport
+from . import commands, diagnostics, keymaps, modeling, ui, viewport
 from .adapters import blendertk_bridge, landfall_bridge, tentacle_bridge, workspace_bridge
 from .bootstrap import deps, paths
 
 bl_info = {
     "name": "Landfall Studio",
     "author": "Framedworld",
-    "version": (0, 4, 0),
+    "version": (0, 5, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar (N) > Landfall | Preferences > Add-ons > Landfall Studio",
     "description": "Unified Maya-oriented Blender environment (Landfall + Tentacle + blendertk)",
@@ -221,6 +221,7 @@ if bpy is not None:
         + viewport.VIEWPORT_CLASSES
         + keymaps.KEYMAP_CLASSES
         + ui.UI_CLASSES
+        + modeling.MODELING_CLASSES
     )
 else:
     STUDIO_CLASSES = ()
@@ -381,10 +382,11 @@ def unregister():
     except Exception as exc:
         print(f"[landfall_studio] ui unregister warning: {exc}")
 
-    # 3. Stop any open Studio marking menu & HUD draw handlers and clear command state
+    # 3. Stop any open Studio marking menu & HUD draw handlers and clear command & modeling state
     try:
         viewport.unregister_hud_handler()
         viewport.unregister_marking_menu_handlers()
+        modeling.clear_modeling_state()
         commands.clear_state()
     except Exception as exc:
         print(f"[landfall_studio] viewport/commands unregister warning: {exc}")

@@ -28,25 +28,31 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
         {"id": "poly_sphere", "label": "Sphere", "icon": "poly_sphere", "tool_ctx": "POLY_SPHERE", "tip": "Create Polygon Sphere (Double-click / □ for Option Box)"},
         {"id": "poly_cylinder", "label": "Cylinder", "icon": "poly_cylinder", "tool_ctx": "POLY_CYLINDER", "tip": "Create Polygon Cylinder (Double-click / □ for Option Box)"},
         {"id": "poly_plane", "label": "Plane", "icon": "poly_plane", "tool_ctx": "POLY_PLANE", "tip": "Create Polygon Plane (Double-click / □ for Option Box)"},
-        {"id": "extrude", "label": "Extrude", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Poly Extrude / Solidify (Double-click / □ for Option Box)"},
-        {"id": "bevel", "label": "Bevel", "icon": "bevel", "tool_ctx": "BEVEL", "tip": "Poly Bevel (Double-click / □ for Option Box)"},
-        {"id": "bridge", "label": "Bridge", "icon": "bridge", "tool_ctx": "BRIDGE", "tip": "Bridge Edge Loops"},
-        {"id": "merge_verts", "label": "Merge", "icon": "merge_verts", "tool_ctx": "MERGE", "tip": "Merge Vertices at Center / By Distance"},
+        {"id": "extrude", "label": "Extrude", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Poly Extrude + In-Viewport Caddy (Double-click / □ for Option Box)"},
+        {"id": "bevel", "label": "Bevel", "icon": "bevel", "tool_ctx": "BEVEL", "tip": "Poly Bevel + In-Viewport Caddy (Double-click / □ for Option Box)"},
+        {"id": "bridge", "label": "Bridge", "icon": "bridge", "tool_ctx": "BRIDGE", "tip": "Bridge Edge Loops + In-Viewport Caddy"},
+        {"id": "connect", "label": "Connect", "icon": "connect", "tool_ctx": "CONNECT", "tip": "Connect Components + In-Viewport Caddy"},
+        {"id": "target_weld", "label": "Tgt Weld", "icon": "target_weld", "tool_ctx": "MERGE", "tip": "Maya Target Weld Tool (blendertk.TargetWeld)"},
+        {"id": "quad_draw", "label": "Quad Draw", "icon": "quad_draw", "tool_ctx": "SUBDIV", "tip": "Maya Quad Draw Retopology Tool"},
+        {"id": "make_live", "label": "Make Live", "icon": "make_live", "tool_ctx": "PIVOT", "tip": "Designate Selected Mesh as Scoped Live Surface"},
         {"id": "center_pivot", "label": "Center Piv", "icon": "center_pivot", "tool_ctx": "PIVOT", "tip": "Modify > Center Pivot"},
+        {"id": "non_def_history", "label": "Non-Def", "icon": "non_def_history", "tool_ctx": "HISTORY", "tip": "Edit > Delete by Type > Non-Deformer History"},
         {"id": "delete_history", "label": "Del Hist", "icon": "delete_history", "tool_ctx": "HISTORY", "tip": "Edit > Delete by Type > History (Alt+Shift+D)"},
         {"id": "freeze_transforms", "label": "Freeze", "icon": "freeze_transforms", "tool_ctx": "FREEZE", "tip": "Modify > Freeze Transformations"},
     ],
     "Modeling": [
-        {"id": "extrude", "label": "Extrude", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Poly Extrude"},
-        {"id": "bevel", "label": "Bevel", "icon": "bevel", "tool_ctx": "BEVEL", "tip": "Poly Bevel"},
-        {"id": "bridge", "label": "Bridge", "icon": "bridge", "tool_ctx": "BRIDGE", "tip": "Bridge Edge Loops"},
-        {"id": "merge_verts", "label": "Merge", "icon": "merge_verts", "tool_ctx": "MERGE", "tip": "Merge Vertices"},
+        {"id": "extrude", "label": "Extrude", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Poly Extrude + In-Viewport Caddy"},
+        {"id": "bevel", "label": "Bevel", "icon": "bevel", "tool_ctx": "BEVEL", "tip": "Poly Bevel + In-Viewport Caddy"},
+        {"id": "bridge", "label": "Bridge", "icon": "bridge", "tool_ctx": "BRIDGE", "tip": "Bridge Edge Loops + In-Viewport Caddy"},
+        {"id": "connect", "label": "Connect", "icon": "connect", "tool_ctx": "CONNECT", "tip": "Connect Components + In-Viewport Caddy"},
+        {"id": "target_weld", "label": "Tgt Weld", "icon": "target_weld", "tool_ctx": "MERGE", "tip": "Target Weld Vertices"},
+        {"id": "quad_draw", "label": "Quad Draw", "icon": "quad_draw", "tool_ctx": "SUBDIV", "tip": "Quad Draw Retopology Tool"},
+        {"id": "make_live", "label": "Make Live", "icon": "make_live", "tool_ctx": "PIVOT", "tip": "Toggle Scoped Make Live Surface"},
         {"id": "smooth_1", "label": "Cage (1)", "icon": "smooth_1", "tool_ctx": "SUBDIV", "tip": "Smooth Mesh Preview: Base Cage (1)"},
         {"id": "smooth_2", "label": "Both (2)", "icon": "smooth_2", "tool_ctx": "SUBDIV", "tip": "Smooth Mesh Preview: Cage + Subdiv (2)"},
         {"id": "smooth_3", "label": "Smooth (3)", "icon": "smooth_3", "tool_ctx": "SUBDIV", "tip": "Smooth Mesh Preview: Smooth (3)"},
-        {"id": "border_edges", "label": "Borders", "icon": "border_edges", "tool_ctx": "DISPLAY", "tip": "Toggle Maya Border Edge Highlight"},
-        {"id": "center_pivot", "label": "Center Piv", "icon": "center_pivot", "tool_ctx": "PIVOT", "tip": "Center Pivot"},
-        {"id": "delete_history", "label": "Del Hist", "icon": "delete_history", "tool_ctx": "HISTORY", "tip": "Delete Construction History"},
+        {"id": "non_def_history", "label": "Non-Def", "icon": "non_def_history", "tool_ctx": "HISTORY", "tip": "Delete Non-Deformer History"},
+        {"id": "scene_audit", "label": "Audit", "icon": "scene_audit", "tool_ctx": "PIPELINE", "tip": "Run Read-Only Scene Diagnostics"},
     ],
     "Subdiv & Display": [
         {"id": "smooth_1", "label": "Mode 1", "icon": "smooth_1", "tool_ctx": "SUBDIV", "tip": "Base Mesh Display (1)"},
@@ -59,6 +65,8 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
     ],
     "UV & Shading": [
         {"id": "uv_mode", "label": "UV Mode", "icon": "uv_unwrap", "tool_ctx": "UV", "tip": "Enter UV Component Mode (F12)"},
+        {"id": "uv_unwrap_pack", "label": "Auto UV", "icon": "uv_unwrap", "tool_ctx": "UV", "tip": "Auto Unwrap & Pack UVs"},
+        {"id": "texel_density", "label": "Texel Den", "icon": "texel_density", "tool_ctx": "UV", "tip": "Measure / Apply Texel Density (2048 Map)"},
         {"id": "pbr_shader", "label": "Std Surface", "icon": "pbr_shader", "tool_ctx": "SHADER", "tip": "Assign New Standard Surface / Principled Shader"},
         {"id": "wire_on_shaded", "label": "Wire/Shaded", "icon": "wire_on_shaded", "tool_ctx": "DISPLAY", "tip": "Toggle Wireframe on Shaded"},
     ],
@@ -67,11 +75,13 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
         {"id": "bevel", "label": "Bevel Mod", "icon": "bevel", "tool_ctx": "BEVEL", "tip": "Add Bevel Input Node"},
         {"id": "extrude", "label": "Solidify", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Add Solidify Input Node"},
         {"id": "freeze_transforms", "label": "Freeze", "icon": "freeze_transforms", "tool_ctx": "FREEZE", "tip": "Freeze Transformations"},
-        {"id": "delete_history", "label": "Bake Hist", "icon": "delete_history", "tool_ctx": "HISTORY", "tip": "Delete Non-Deformer / Construction History"},
+        {"id": "non_def_history", "label": "Non-Def", "icon": "non_def_history", "tool_ctx": "HISTORY", "tip": "Delete Non-Deformer History (Preserves Rig/ShapeKeys)"},
+        {"id": "delete_history", "label": "Bake Hist", "icon": "delete_history", "tool_ctx": "HISTORY", "tip": "Delete Construction History"},
     ],
     "Pipeline": [
         {"id": "workspace_ed", "label": "Workspace", "icon": "workspace_ed", "tool_ctx": "PIPELINE", "tip": "Open Project Workspace Editor (workspace.mel)"},
         {"id": "reference_mgr", "label": "References", "icon": "reference_mgr", "tool_ctx": "PIPELINE", "tip": "Open Maya Reference Editor"},
+        {"id": "scene_audit", "label": "Scene Audit", "icon": "scene_audit", "tool_ctx": "PIPELINE", "tip": "Run Read-Only Scene Diagnostics"},
         {"id": "new_display_layer", "label": "+ Layer", "icon": "quad_view", "tool_ctx": "LAYERS", "tip": "Create Display Layer from Selected Objects"},
         {"id": "script_output", "label": "Script Ed", "icon": "hierarchy_mgr", "tool_ctx": "PIPELINE", "tip": "Toggle Script Output Console"},
     ],
@@ -81,7 +91,8 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
 def execute_shelf_item(item_id: str) -> Dict[str, Any]:
     """Execute a Maya Shelf button command by `item_id` and record in command feedback."""
     import bpy
-    from . import desktop
+    from .. import modeling
+    from . import desktop, modeling_toolkit
 
     iid = (item_id or "").strip().lower()
     if iid in ("poly_cube", "poly_sphere", "poly_cylinder", "poly_plane"):
@@ -109,29 +120,74 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         desktop.set_command_feedback(f"poly{ptype.title()}", res.get("object_name", ptype))
         return {"ok": True, "item_id": iid, "result": res}
 
-    if iid in ("bevel", "extrude"):
-        tool_settings.set_tool_setting("tool_context", iid.upper())
-        res = tool_settings.apply_current_tool_option_box()
+    if iid in ("bevel", "extrude", "bridge", "connect"):
+        res = modeling.invoke_modeling_caddy(iid.upper())
         desktop.sync_channels_now()
         channel_box_ext.refresh_channel_box_extensions()
-        desktop.set_command_feedback(f"poly{iid.title()}", str(res.get("modifier", iid)))
-        return {"ok": True, "item_id": iid, "result": res}
+        modeling_toolkit.refresh_modeling_toolkit_widgets()
+        desktop.set_command_feedback(f"poly{iid.title()}", str(res.get("node_title", iid)))
+        return {"ok": res.get("ok", True), "item_id": iid, "result": res}
+
+    if iid == "target_weld":
+        res = modeling.activate_target_weld(merge_to_center=False)
+        desktop.set_command_feedback("TargetWeldTool", "Active")
+        return {"ok": res.get("ok", True), "item_id": iid, "result": res}
+
+    if iid == "quad_draw":
+        modeling.set_quad_draw_active(True)
+        obj = modeling.ensure_retopo_mesh()
+        modeling_toolkit.refresh_modeling_toolkit_widgets()
+        desktop.set_command_feedback("QuadDrawTool", obj.name if obj else "Active")
+        return {"ok": True, "item_id": iid}
+
+    if iid == "make_live":
+        res = modeling.set_live_surface(toggle=True)
+        refresh_top_shelf_status()
+        modeling_toolkit.refresh_modeling_toolkit_widgets()
+        desktop.set_command_feedback(
+            "MakeLive",
+            res.get("object_name") if res.get("active") else "Cleared",
+        )
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
+
+    if iid == "non_def_history":
+        res = modeling.delete_non_deformer_history()
+        desktop.sync_channels_now()
+        channel_box_ext.refresh_channel_box_extensions()
+        modeling_toolkit.refresh_modeling_toolkit_widgets()
+        desktop.set_command_feedback(
+            "BakeNonDefHistory",
+            res.get("reason") if res.get("guarded") else res.get("object_name", "OK"),
+        )
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
+
+    if iid == "scene_audit":
+        rep = modeling.run_scene_diagnostics()
+        issues = rep.get("mesh_issues", {})
+        desktop.set_command_feedback(
+            "SceneAudit",
+            f"NGons={issues.get('ngons', 0)} NonManifold={issues.get('nonmanifold', 0)}",
+        )
+        return {"ok": True, "item_id": iid, "result": rep}
+
+    if iid == "uv_unwrap_pack":
+        res = modeling.uv_unwrap_and_pack()
+        desktop.set_command_feedback("polyAutoProjection", res.get("object_name", "OK"))
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
+
+    if iid == "texel_density":
+        res = modeling.get_mesh_texel_density(map_size=2048)
+        desktop.set_command_feedback(
+            "texelDensity",
+            f"{res.get('texel_density', 0.0):.1f} px/m",
+        )
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
 
     if iid == "center_pivot":
-        active = getattr(bpy.context.view_layer.objects, "active", None)
-        if active is not None:
-            try:
-                import blendertk as btk
-
-                btk.bake_pivot(active, to="CENTER")
-            except Exception:
-                try:
-                    bpy.ops.object.origin_set(type="ORIGIN_GEOMETRY", center="BOUNDS")
-                except Exception:
-                    pass
+        res = modeling.center_or_bake_pivot_guarded(mode="CENTER")
         desktop.sync_channels_now()
-        desktop.set_command_feedback("CenterPivot", active.name if active else "OK")
-        return {"ok": True, "item_id": iid}
+        desktop.set_command_feedback("CenterPivot", res.get("object_name", "OK"))
+        return {"ok": res.get("ok", True), "item_id": iid, "result": res}
 
     if iid == "delete_history":
         res = channel_box_ext.delete_construction_history()
@@ -141,19 +197,13 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         return {"ok": res.get("ok", False), "item_id": iid, "result": res}
 
     if iid == "freeze_transforms":
-        active = getattr(bpy.context.view_layer.objects, "active", None)
-        if active is not None and not channel_box_ext.is_datablock_linked(active):
-            try:
-                import blendertk as btk
-
-                btk.freeze_transforms(
-                    [active], location=True, rotation=True, scale=True
-                )
-            except Exception:
-                pass
+        res = modeling.freeze_transformations_guarded()
         desktop.sync_channels_now()
-        desktop.set_command_feedback("FreezeTransformations", active.name if active else "OK")
-        return {"ok": True, "item_id": iid}
+        desktop.set_command_feedback(
+            "FreezeTransformations",
+            res.get("reason") if res.get("guarded") else res.get("object_name", "OK"),
+        )
+        return {"ok": res.get("ok", True), "item_id": iid, "result": res}
 
     if iid in ("smooth_1", "smooth_2", "smooth_3"):
         mode_map = {"smooth_1": "CAGE", "smooth_2": "BOTH", "smooth_3": "SMOOTH"}
@@ -356,11 +406,20 @@ class MayaShelfWidget:
             btn.clicked.connect(lambda _=False, s=snap_elem: self._trigger_snap_toggle(s))
             slay.addWidget(btn)
 
+        # Maya Make Live Magnet + Surface Name Pill
+        self.btn_live_surface = QtWidgets.QPushButton("Live: Off")
+        self.btn_live_surface.setIcon(icons.get_icon("make_live", 14))
+        self.btn_live_surface.setFixedHeight(20)
+        self.btn_live_surface.setToolTip("Make Selected Mesh Live (Scoped Surface Projection)")
+        self.btn_live_surface.clicked.connect(lambda: execute_shelf_item("make_live"))
+        slay.addWidget(self.btn_live_surface)
+
         slay.addWidget(self._make_vsep())
 
         # History / Transform quick actions
         for act_icon, act_id, tip in (
             ("center_pivot", "center_pivot", "Center Pivot"),
+            ("non_def_history", "non_def_history", "Delete by Type > Non-Deformer History"),
             ("delete_history", "delete_history", "Delete by Type > History (Alt+Shift+D)"),
             ("freeze_transforms", "freeze_transforms", "Freeze Transformations"),
         ):
@@ -382,6 +441,7 @@ class MayaShelfWidget:
         for lbl, mode_target, tip in (
             ("Outliner", "OUTLINER", "Toggle Left DAG Outliner"),
             ("Ch Box", "CHANNEL_BOX", "Show Channel Box / Layer Editor (Ctrl+A)"),
+            ("Mod Toolkit", "MODELING_TOOLKIT", "Show Maya Modeling Toolkit"),
             ("Tool Set", "TOOL_SETTINGS", "Show Tool Settings (□)"),
             ("Attr Ed", "ATTRIBUTE_EDITOR", "Show Attribute Editor (Ctrl+A)"),
         ):
@@ -413,6 +473,8 @@ class MayaShelfWidget:
             self.tabs.addTab(page, tab_name)
 
         vlay.addWidget(self.tabs)
+        _shelf_instances.append(self)
+        self.refresh_status()
 
     @staticmethod
     def _make_vsep():
@@ -455,6 +517,31 @@ class MayaShelfWidget:
             desktop.toggle_left_outliner_dock()
         else:
             desktop.cycle_right_dock(target)
+
+    def refresh_status(self) -> None:
+        from .. import modeling
+
+        st = modeling.get_live_surface_state()
+        if st.get("active") and st.get("object_name"):
+            self.btn_live_surface.setText(f"LIVE: {st['object_name']}")
+            self.btn_live_surface.setStyleSheet(
+                "background-color: #163628; color: #52E088; border: 1px solid #2EB868; font-weight: bold;"
+            )
+        else:
+            self.btn_live_surface.setText("Live: Off")
+            self.btn_live_surface.setStyleSheet("")
+
+
+_shelf_instances: List[MayaShelfWidget] = []
+
+
+def refresh_top_shelf_status() -> None:
+    """Refresh the Top Status Line (`Live: <Surface>` pill) across all active shelf widgets."""
+    for inst in list(_shelf_instances):
+        try:
+            inst.refresh_status()
+        except Exception:
+            pass
 
 
 class TopShelfQtDock:

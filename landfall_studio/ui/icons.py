@@ -452,6 +452,92 @@ def render_pixmap(name: str, size: int = 24):
         p.setBrush(QtCore.Qt.NoBrush)
         p.drawPath(path)
 
+    elif key == "quad_draw":
+        # Maya Quad Draw icon: cyan/teal quad surface with 4 glowing green plotted corner dots
+        quad = QtGui.QPolygonF([QtCore.QPointF(6, 6), QtCore.QPointF(18, 5), QtCore.QPointF(19, 18), QtCore.QPointF(5, 17)])
+        p.setPen(pen_teal)
+        p.setBrush(c_teal_fill)
+        p.drawPolygon(quad)
+        p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 130), 1.0, QtCore.Qt.DashLine))
+        p.drawLine(QtCore.QPointF(12, 5.5), QtCore.QPointF(12, 17.5))
+        p.drawLine(QtCore.QPointF(5.5, 11.5), QtCore.QPointF(18.5, 11.5))
+        p.setBrush(c_green)
+        p.setPen(pen_dark)
+        for pt in (QtCore.QPointF(6, 6), QtCore.QPointF(18, 5), QtCore.QPointF(19, 18), QtCore.QPointF(5, 17)):
+            p.drawEllipse(pt, 2.7, 2.7)
+
+    elif key == "target_weld":
+        # Maya Target Weld icon: yellow source vert + dashed line + arrow to aqua target vert
+        p.setPen(QtGui.QPen(c_light, 1.5, QtCore.Qt.DashLine))
+        p.drawLine(QtCore.QPointF(6, 17), QtCore.QPointF(17, 7))
+        p.setPen(QtGui.QPen(c_teal, 1.6))
+        p.drawLine(QtCore.QPointF(17, 7), QtCore.QPointF(12.5, 7.5))
+        p.drawLine(QtCore.QPointF(17, 7), QtCore.QPointF(16.5, 11.5))
+        p.setBrush(c_amber)
+        p.setPen(pen_dark)
+        p.drawRect(QtCore.QRectF(3.5, 14.5, 5, 5))
+        p.setBrush(c_teal)
+        p.drawEllipse(QtCore.QPointF(17.5, 6.5), 3.3, 3.3)
+
+    elif key == "make_live":
+        # Maya Make Live magnet + emerald sphere badge
+        p.setPen(QtGui.QPen(c_green, 2.2, QtCore.Qt.SolidLine, QtCore.Qt.FlatCap))
+        p.setBrush(QtCore.Qt.NoBrush)
+        p.drawArc(QtCore.QRectF(5, 4, 14, 13), 0, 180 * 16)
+        p.drawLine(QtCore.QPointF(5, 10.5), QtCore.QPointF(5, 16))
+        p.drawLine(QtCore.QPointF(19, 10.5), QtCore.QPointF(19, 16))
+        p.setPen(QtGui.QPen(c_light, 2.2))
+        p.drawLine(QtCore.QPointF(5, 16.5), QtCore.QPointF(5, 19))
+        p.drawLine(QtCore.QPointF(19, 16.5), QtCore.QPointF(19, 19))
+        p.setBrush(c_green)
+        p.setPen(pen_dark)
+        p.drawEllipse(QtCore.QPointF(12, 18.5), 3.2, 3.2)
+
+    elif key == "connect":
+        # Polygon quad with bright amber mid-edge connection cut
+        p.setPen(pen_light)
+        p.setBrush(QtGui.QColor("#3E4652"))
+        p.drawRect(QtCore.QRectF(4, 5, 16, 14))
+        p.setPen(QtGui.QPen(c_amber, 2.2))
+        p.drawLine(QtCore.QPointF(4, 12), QtCore.QPointF(20, 12))
+        p.setBrush(c_amber)
+        p.setPen(pen_dark)
+        p.drawEllipse(QtCore.QPointF(4, 12), 2.5, 2.5)
+        p.drawEllipse(QtCore.QPointF(20, 12), 2.5, 2.5)
+
+    elif key == "non_def_history":
+        # Deformer bone preserved (green) + modeling history cleared (amber/teal)
+        p.setPen(QtGui.QPen(c_green, 1.8))
+        p.drawLine(QtCore.QPointF(5, 19), QtCore.QPointF(12, 12))
+        p.setBrush(c_green)
+        p.drawEllipse(QtCore.QPointF(5, 19), 2.5, 2.5)
+        p.setPen(QtGui.QPen(c_amber, 1.6))
+        p.setBrush(c_amber_fill)
+        p.drawRect(QtCore.QRectF(11, 4, 9, 6))
+
+    elif key == "texel_density":
+        # 2x2 UV checker grid with teal/amber density squares
+        p.setPen(pen_dark)
+        p.setBrush(c_teal)
+        p.drawRect(QtCore.QRectF(4, 4, 8, 8))
+        p.drawRect(QtCore.QRectF(12, 12, 8, 8))
+        p.setBrush(QtGui.QColor("#2F3540"))
+        p.drawRect(QtCore.QRectF(12, 4, 8, 8))
+        p.drawRect(QtCore.QRectF(4, 12, 8, 8))
+        p.setPen(QtGui.QPen(c_amber, 1.4))
+        p.setBrush(QtCore.Qt.NoBrush)
+        p.drawRect(QtCore.QRectF(4, 4, 16, 16))
+
+    elif key == "scene_audit":
+        # Diagnostic shield / magnifying check
+        p.setPen(QtGui.QPen(c_teal, 1.8))
+        p.setBrush(c_teal_fill)
+        p.drawEllipse(QtCore.QRectF(4, 4, 13, 13))
+        p.drawLine(QtCore.QPointF(15, 15), QtCore.QPointF(20, 20))
+        p.setPen(QtGui.QPen(c_green, 2.0, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap, QtCore.Qt.RoundJoin))
+        p.drawLine(QtCore.QPointF(7.5, 10.5), QtCore.QPointF(10, 13))
+        p.drawLine(QtCore.QPointF(10, 13), QtCore.QPointF(14, 8))
+
     else:
         # Clean fallback geometric diamond badge
         poly = QtGui.QPolygonF([QtCore.QPointF(12, 4), QtCore.QPointF(20, 12), QtCore.QPointF(12, 20), QtCore.QPointF(4, 12)])

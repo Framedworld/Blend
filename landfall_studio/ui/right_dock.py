@@ -13,11 +13,11 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from . import attribute_editor, channel_box_ext, style, tool_settings
+from . import attribute_editor, channel_box_ext, modeling_toolkit, style, tool_settings
 
 
 class _RightSidebarHostWidget:
-    """Frameless Qt container holding the Maya right-sidebar tab strip + `QStackedWidget` (`Channel Box`, `Attribute Editor`, `Tool Settings`)."""
+    """Frameless Qt container holding the Maya right-sidebar tab strip + `QStackedWidget` (`Channel Box`, `Modeling Toolkit`, `Attribute Editor`, `Tool Settings`)."""
 
     def __init__(self, on_mode_tab_clicked: Callable[[str], None]):
         from qtpy import QtCore, QtWidgets
@@ -31,19 +31,24 @@ class _RightSidebarHostWidget:
         vlay.setContentsMargins(0, 0, 0, 0)
         vlay.setSpacing(0)
 
-        # Top Maya Sidebar Tab Bar (Channel Box / Layer Editor | Attribute Editor | Tool Settings)
+        # Top Maya Sidebar Tab Bar (Ch Box / Layers | Modeling Toolkit | Attribute Editor | Tool Settings)
         tab_strip = QtWidgets.QFrame()
         tab_strip.setObjectName("MayaStatusLine")
         tlay = QtWidgets.QHBoxLayout(tab_strip)
         tlay.setContentsMargins(3, 3, 3, 2)
         tlay.setSpacing(2)
 
-        self.btn_cb = QtWidgets.QPushButton("Channel Box / Layers")
+        self.btn_cb = QtWidgets.QPushButton("Ch Box / Layers")
         self.btn_cb.setCheckable(True)
         self.btn_cb.setFixedHeight(22)
         self.btn_cb.clicked.connect(lambda: self._on_mode_tab_clicked("CHANNEL_BOX"))
 
-        self.btn_ae = QtWidgets.QPushButton("Attribute Editor")
+        self.btn_mtk = QtWidgets.QPushButton("Modeling Toolkit")
+        self.btn_mtk.setCheckable(True)
+        self.btn_mtk.setFixedHeight(22)
+        self.btn_mtk.clicked.connect(lambda: self._on_mode_tab_clicked("MODELING_TOOLKIT"))
+
+        self.btn_ae = QtWidgets.QPushButton("Attr Editor")
         self.btn_ae.setCheckable(True)
         self.btn_ae.setFixedHeight(22)
         self.btn_ae.clicked.connect(lambda: self._on_mode_tab_clicked("ATTRIBUTE_EDITOR"))
@@ -54,6 +59,7 @@ class _RightSidebarHostWidget:
         self.btn_ts.clicked.connect(lambda: self._on_mode_tab_clicked("TOOL_SETTINGS"))
 
         tlay.addWidget(self.btn_cb, 1)
+        tlay.addWidget(self.btn_mtk, 1)
         tlay.addWidget(self.btn_ae, 1)
         tlay.addWidget(self.btn_ts, 1)
         vlay.addWidget(tab_strip)
@@ -72,6 +78,9 @@ class _RightSidebarHostWidget:
 
         self.ts_ctrl = tool_settings.ensure_tool_settings_widget()
         self.stack.addWidget(self.ts_ctrl.widget if self.ts_ctrl else QtWidgets.QWidget())
+
+        self.mtk_widget = modeling_toolkit.create_modeling_toolkit_widget()
+        self.stack.addWidget(self.mtk_widget)
 
         self._attached_channels = None
 
@@ -101,6 +110,7 @@ class _RightSidebarHostWidget:
     def set_active_page(self, mode: str) -> None:
         m = (mode or "CHANNEL_BOX").upper()
         self.btn_cb.setChecked(m == "CHANNEL_BOX")
+        self.btn_mtk.setChecked(m == "MODELING_TOOLKIT")
         self.btn_ae.setChecked(m == "ATTRIBUTE_EDITOR")
         self.btn_ts.setChecked(m == "TOOL_SETTINGS")
 
@@ -112,6 +122,10 @@ class _RightSidebarHostWidget:
             if self.ts_ctrl is not None:
                 self.ts_ctrl.refresh()
             self.stack.setCurrentIndex(2)
+        elif m == "MODELING_TOOLKIT":
+            if self.mtk_widget is not None:
+                self.mtk_widget.refresh_from_scene()
+            self.stack.setCurrentIndex(3)
         else:
             if self._attached_channels is not None:
                 self._attached_channels.show()
@@ -120,7 +134,7 @@ class _RightSidebarHostWidget:
 
 
 class RightAreaQtDock:
-    """Right-column `WS_CHILD` dock manager supporting `Channel Box`, `Attribute Editor`, `Tool Settings`, and `Native Properties`."""
+    """Right-column `WS_CHILD` dock manager supporting `Channel Box`, `Modeling Toolkit`, `Attribute Editor`, `Tool Settings`, and `Native Properties`."""
 
     DEFAULT_WIDTH = 340
 
@@ -158,7 +172,7 @@ class RightAreaQtDock:
     def is_qt_embedded(self) -> bool:
         return bool(
             self._inner_dock.docked
-            and self._mode in ("CHANNEL_BOX", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS")
+            and self._mode in ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS")
         )
 
     @property
@@ -193,7 +207,7 @@ class RightAreaQtDock:
 
     def _handle_inner_detach(self) -> None:
         self._created_split_area = False
-        if self._mode in ("CHANNEL_BOX", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS"):
+        if self._mode in ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS"):
             self._mode = "HIDDEN"
         if self._user_on_detach is not None:
             try:
@@ -354,6 +368,13 @@ class RightAreaQtDock:
         tool_settings.ensure_tool_settings_widget(tool_context=tool_context)
         return self._dock_host_in_right_area(
             self._channels_widget, target_mode="TOOL_SETTINGS"
+        )
+
+    def show_modeling_toolkit(self) -> bool:
+        """Show the Maya Qt `Modeling Toolkit` tab in the right dock."""
+        modeling_toolkit.refresh_modeling_toolkit_widgets()
+        return self._dock_host_in_right_area(
+            self._channels_widget, target_mode="MODELING_TOOLKIT"
         )
 
     def show_native_properties(self, properties_context: str = "OBJECT") -> bool:

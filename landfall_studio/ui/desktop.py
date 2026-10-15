@@ -26,6 +26,7 @@ from . import (
     attribute_editor,
     channel_box_ext,
     hotkey_passthrough,
+    modeling_toolkit,
     outliner,
     shelf,
     style,
@@ -576,7 +577,7 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
         order = ("CHANNEL_BOX", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "HIDDEN")
         idx = (order.index(cur) + 1) % len(order) if cur in order else 0
         next_mode = order[idx]
-    elif req in ("CHANNEL_BOX", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "NATIVE_PROPERTIES", "HIDDEN"):
+    elif req in ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "NATIVE_PROPERTIES", "HIDDEN"):
         next_mode = req
     else:
         next_mode = "CHANNEL_BOX"
@@ -584,6 +585,8 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
     if next_mode == "CHANNEL_BOX":
         rdock.dock_channel_box(widget)
         sync_channels_now()
+    elif next_mode == "MODELING_TOOLKIT":
+        rdock.show_modeling_toolkit()
     elif next_mode == "ATTRIBUTE_EDITOR":
         rdock.show_attribute_editor(properties_context="OBJECT")
         attribute_editor.refresh_attribute_editor()
@@ -746,7 +749,7 @@ def _compute_selection_value_sig() -> Tuple[Any, ...]:
 
 
 def _on_live_scene_or_depsgraph_update(*_args) -> None:
-    """Refresh `Channels`, `SHAPES/INPUTS`, `Display Layers`, `Attribute Editor`, `Tool Settings`, and `Outliner`."""
+    """Refresh `Channels`, `SHAPES/INPUTS`, `Display Layers`, `Modeling Toolkit`, `Attribute Editor`, `Tool Settings`, and `Outliner`."""
     global _last_selection_value_sig
     sig = _compute_selection_value_sig()
     if sig == _last_selection_value_sig:
@@ -754,6 +757,8 @@ def _on_live_scene_or_depsgraph_update(*_args) -> None:
     _last_selection_value_sig = sig
     sync_channels_now()
     channel_box_ext.refresh_channel_box_extensions()
+    modeling_toolkit.refresh_modeling_toolkit_widgets()
+    shelf.refresh_top_shelf_status()
     attribute_editor.refresh_attribute_editor()
     tool_settings.refresh_tool_settings_widget()
     outliner.refresh_outliner()
@@ -1334,6 +1339,7 @@ if bpy is not None:
                 ("CYCLE", "Cycle (Channel Box <-> Attribute Editor)", "Toggle between Channel Box and Attribute Editor"),
                 ("CYCLE_3", "Cycle 3-Way (Channel Box -> Attribute Editor -> Tool Settings -> Hidden)", "Cycle all right-sidebar modes"),
                 ("CHANNEL_BOX", "Channel Box", "Show the docked Qt Channel Box"),
+                ("MODELING_TOOLKIT", "Modeling Toolkit", "Show the Maya Modeling Toolkit"),
                 ("ATTRIBUTE_EDITOR", "Attribute Editor", "Show the Maya Attribute Editor"),
                 ("TOOL_SETTINGS", "Tool Settings", "Show the Maya Tool Settings & Option Box inspector"),
                 ("NATIVE_PROPERTIES", "Native Properties", "Show native Blender Properties editor"),
