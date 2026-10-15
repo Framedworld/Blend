@@ -407,13 +407,23 @@ class MayaLeftSidebarWidget:
             tblay.addWidget(btn)
             self.tool_btns[tool_id] = btn
 
-        # Extra Pivot / Soft Select rail buttons matching Figma Make `.tool-rail`
-        for extra_icon, extra_key, extra_tip, extra_cb in (
-            ("snap_pivot", "D", "Edit Pivot Mode (Hold D)", lambda: self._on_quick_layout("CENTER_PIVOT")),
-            ("smooth_3", "B", "Soft Selection / Smooth Preview", lambda: self._on_quick_layout("SOFT_SELECT")),
-        ):
-            ebtn = self._make_rail_action_button(extra_icon, extra_key, extra_tip, extra_cb)
-            tblay.addWidget(ebtn)
+        # Extra Pivot (D) / Soft Select (B) rail buttons matching Figma Make `.tool-rail`
+        self.btn_pivot_rail = self._make_rail_action_button(
+            "snap_pivot",
+            "D",
+            "Edit Pivot Mode (Hold D)",
+            lambda: self._on_quick_layout("CENTER_PIVOT"),
+        )
+        tblay.addWidget(self.btn_pivot_rail)
+
+        self.btn_soft_rail = self._make_rail_action_button(
+            "smooth_3",
+            "B",
+            "Maya Soft Selection Toggle (B) / Hold B+LMB Falloff Radius",
+            lambda: self._on_quick_layout("SOFT_SELECT"),
+            checkable=True,
+        )
+        tblay.addWidget(self.btn_soft_rail)
 
         tblay.addStretch(1)
 
@@ -579,29 +589,34 @@ class MayaLeftSidebarWidget:
         btn.clicked.connect(lambda _=False, t=tool_id: parent_self._activate_tool(t))
         return btn
 
-    def _make_rail_action_button(self, icon_name: str, key_hint: str, tip: str, cb):
+    def _make_rail_action_button(
+        self, icon_name: str, key_hint: str, tip: str, cb, checkable: bool = False
+    ):
         from qtpy import QtCore, QtGui, QtWidgets
 
         class _RailActionBtn(QtWidgets.QToolButton):
             def paintEvent(self, event):
                 super().paintEvent(event)
+                p = QtGui.QPainter(self)
+                if self.isChecked():
+                    p.fillRect(0, 4, 2, self.height() - 8, QtGui.QColor("#F0A830"))
                 if key_hint:
-                    p = QtGui.QPainter(self)
                     f = p.font()
                     f.setFamily("Consolas")
                     f.setPixelSize(7)
                     f.setBold(True)
                     p.setFont(f)
-                    p.setPen(QtGui.QColor("#68717A"))
+                    p.setPen(QtGui.QColor("#FAD075" if self.isChecked() else "#68717A"))
                     p.drawText(
                         QtCore.QRectF(0, 0, self.width() - 3, self.height() - 2),
                         QtCore.Qt.AlignRight | QtCore.Qt.AlignBottom,
                         key_hint,
                     )
-                    p.end()
+                p.end()
 
         btn = _RailActionBtn()
         btn.setObjectName("MayaToolBoxBtn")
+        btn.setCheckable(checkable)
         btn.setIcon(icons.get_icon(icon_name, 17))
         btn.setIconSize(QtCore.QSize(17, 17))
         btn.setFixedSize(32, 32)
@@ -620,12 +635,20 @@ class MayaLeftSidebarWidget:
         self._sync_toolbox_highlight()
 
     def _sync_toolbox_highlight(self) -> None:
+        from .. import continuity
+
         cur = cmd_registry.get_active_tool()
         for tid, btn in self.tool_btns.items():
             btn.blockSignals(True)
             btn.setChecked(tid == cur)
             btn.blockSignals(False)
             btn.update()
+        if hasattr(self, "btn_soft_rail"):
+            soft_st = continuity.get_soft_selection_state()
+            self.btn_soft_rail.blockSignals(True)
+            self.btn_soft_rail.setChecked(bool(soft_st.get("enabled")))
+            self.btn_soft_rail.blockSignals(False)
+            self.btn_soft_rail.update()
 
     def _on_quick_layout(self, action: str) -> None:
         import bpy
@@ -640,9 +663,10 @@ class MayaLeftSidebarWidget:
 
             shelf.execute_shelf_item("center_pivot")
         elif action == "SOFT_SELECT":
-            from . import shelf
+            from .. import continuity
 
-            shelf.execute_shelf_item("smooth_3")
+            continuity.set_soft_selection_state(toggle=True)
+            self._sync_toolbox_highlight()
 
     def _on_add_display_layer(self) -> None:
         channel_box_ext.create_display_layer(assign_selected=True)

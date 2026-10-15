@@ -61,10 +61,15 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
         {"id": "smooth_1", "label": "Mode 1", "icon": "smooth_1", "tool_ctx": "SUBDIV", "tip": "Base Mesh Display (1)"},
         {"id": "smooth_2", "label": "Mode 2", "icon": "smooth_2", "tool_ctx": "SUBDIV", "tip": "Cage + Smooth Display (2)"},
         {"id": "smooth_3", "label": "Mode 3", "icon": "smooth_3", "tool_ctx": "SUBDIV", "tip": "Smooth Subdiv Display (3)"},
-        {"id": "wire_on_shaded", "label": "Wireframe", "icon": "wire_on_shaded", "tool_ctx": "DISPLAY", "tip": "Toggle Wireframe on Shaded"},
-        {"id": "xray", "label": "X-Ray", "icon": "xray", "tool_ctx": "DISPLAY", "tip": "Toggle Viewport X-Ray"},
+        {"id": "shade_4", "label": "Wire [4]", "icon": "wire_on_shaded", "tool_ctx": "DISPLAY", "tip": "Maya 4: Wireframe Display Mode"},
+        {"id": "shade_5", "label": "Shaded [5]", "icon": "poly_sphere", "tool_ctx": "DISPLAY", "tip": "Maya 5: Smooth Shaded Display Mode"},
+        {"id": "shade_6", "label": "Tex [6]", "icon": "pbr_shader", "tool_ctx": "DISPLAY", "tip": "Maya 6: Shaded & Textured Display Mode"},
+        {"id": "shade_7", "label": "Lights [7]", "icon": "pbr_shader", "tool_ctx": "DISPLAY", "tip": "Maya 7: Use All Scene Lights"},
+        {"id": "soft_select", "label": "Soft [B]", "icon": "smooth_3", "tool_ctx": "SOFT_SELECT", "tip": "Toggle Maya Soft Selection (B) / Proportional Editing (O)"},
+        {"id": "wire_on_shaded", "label": "Wire/Shd", "icon": "wire_on_shaded", "tool_ctx": "DISPLAY", "tip": "Toggle Wireframe on Shaded"},
+        {"id": "xray", "label": "X-Ray", "icon": "xray", "tool_ctx": "DISPLAY", "tip": "Toggle Viewport X-Ray (Alt+Z)"},
         {"id": "border_edges", "label": "Borders", "icon": "border_edges", "tool_ctx": "DISPLAY", "tip": "Toggle Open Border Edge Highlight"},
-        {"id": "isolate", "label": "Isolate", "icon": "isolate", "tool_ctx": "DISPLAY", "tip": "Isolate Selected (Ctrl+1)"},
+        {"id": "isolate", "label": "Isolate", "icon": "isolate", "tool_ctx": "DISPLAY", "tip": "Isolate Selected"},
     ],
     "UV & Shading": [
         {"id": "hypershade", "label": "Hypershade", "icon": "pbr_shader", "tool_ctx": "SHADER", "tip": "Open Maya Hypershade Material Browser & Shader Graph"},
@@ -85,6 +90,17 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
         {"id": "joint_tool", "label": "Create Joint", "icon": "joint_tool", "tool_ctx": "RIGGING", "tip": "Create Armature / Joint"},
         {"id": "non_def_history", "label": "Non-Def", "icon": "non_def_history", "tool_ctx": "HISTORY", "tip": "Delete Non-Deformer History (Preserves Rig/ShapeKeys)"},
         {"id": "freeze_transforms", "label": "Freeze", "icon": "freeze_transforms", "tool_ctx": "FREEZE", "tip": "Freeze Transformations"},
+    ],
+    "FX / Nodes": [
+        {"id": "geometry_nodes", "label": "Geo Nodes", "icon": "hierarchy_mgr", "tool_ctx": "NODES", "tip": "Attach / Inspect Blender Geometry Nodes Graph on Active Mesh"},
+        {"id": "hypershade", "label": "Shader Ed", "icon": "pbr_shader", "tool_ctx": "SHADER", "tip": "Open Shader Editor / Maya Hypershade Node Graph"},
+        {"id": "sculpt_mode", "label": "Sculpt", "icon": "smooth_3", "tool_ctx": "SCULPT", "tip": "Enter Blender Sculpt Mode (Native F Brush Size / Shift+F Strength)"},
+        {"id": "grease_pencil", "label": "Grease Pcl", "icon": "quad_draw", "tool_ctx": "GPENCIL", "tip": "Create / Activate Grease Pencil 2D/3D Object"},
+        {"id": "uv_editor", "label": "UV Editor", "icon": "uv_unwrap", "tool_ctx": "UV", "tip": "Open UV Component Mode & UV Sync"},
+        {"id": "graph_editor", "label": "Graph Ed", "icon": "blendshape", "tool_ctx": "ANIM", "tip": "Inspect Graph Editor (F-Curves)"},
+        {"id": "dope_sheet", "label": "Dope Sheet", "icon": "hierarchy_mgr", "tool_ctx": "ANIM", "tip": "Inspect Dope Sheet Keyframes"},
+        {"id": "asset_browser", "label": "Assets", "icon": "workspace_ed", "tool_ctx": "PIPELINE", "tip": "Open Blender Asset Browser"},
+        {"id": "soft_select", "label": "Soft [B]", "icon": "smooth_3", "tool_ctx": "SOFT_SELECT", "tip": "Toggle Maya Soft Selection (B) / Hold B+LMB Radius Ring"},
     ],
     "Pipeline": [
         {"id": "maya_bridge_tab", "label": "Maya .ma", "icon": "reference_mgr", "tool_ctx": "PIPELINE", "tip": "Open Maya .ma/.mb Interchange & Reference Dock"},
@@ -299,24 +315,46 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         desktop.set_command_feedback("displaySmoothness", mode_map[iid])
         return {"ok": True, "item_id": iid}
 
+    if iid in ("shade_4", "shade_5", "shade_6", "shade_7"):
+        from .. import continuity
+
+        sh_key = iid.split("_")[-1]
+        res = continuity.set_maya_viewport_shading(sh_key)
+        return {"ok": res.get("ok", True), "item_id": iid, "result": res}
+
+    if iid == "soft_select":
+        from .. import continuity
+
+        res = continuity.set_soft_selection_state(toggle=True)
+        return {"ok": res.get("ok", True), "item_id": iid, "result": res}
+
+    if iid in (
+        "geometry_nodes",
+        "sculpt_mode",
+        "grease_pencil",
+        "uv_editor",
+        "graph_editor",
+        "dope_sheet",
+        "asset_browser",
+    ):
+        from .. import continuity
+
+        res = continuity.open_native_editor_or_mode(iid.upper())
+        return {"ok": res.get("ok", True), "item_id": iid, "result": res}
+
     if iid == "wire_on_shaded":
-        active = getattr(bpy.context.view_layer.objects, "active", None)
-        if active is not None:
-            active.show_wire = not bool(active.show_wire)
-            active.show_all_edges = active.show_wire
+        from .. import continuity
+
+        res = continuity.set_maya_viewport_shading("WIRE_ON_SHADED")
         desktop.set_command_feedback("WireframeOnShaded", "Toggled")
-        return {"ok": True, "item_id": iid}
+        return {"ok": True, "item_id": iid, "result": res}
 
     if iid == "xray":
-        wm = getattr(bpy.context, "window_manager", None)
-        for win in (wm.windows if wm else []):
-            for a in (win.screen.areas if win.screen else []):
-                if a.type == "VIEW_3D":
-                    sp = a.spaces.active
-                    if sp is not None and hasattr(sp, "shading"):
-                        sp.shading.show_xray = not bool(sp.shading.show_xray)
+        from .. import continuity
+
+        res = continuity.set_maya_viewport_shading("XRAY")
         desktop.set_command_feedback("ToggleXRay", "Toggled")
-        return {"ok": True, "item_id": iid}
+        return {"ok": True, "item_id": iid, "result": res}
 
     if iid == "border_edges":
         try:
@@ -588,7 +626,15 @@ class MayaShelfWidget:
 
         slay.addWidget(self._make_vsep())
 
-        # 7. Symmetry Tag + History Quick Actions
+        # 7. Soft Select [B] Pill + Symmetry Tag + History Quick Actions
+        self.btn_soft_select = QtWidgets.QPushButton("◎ Soft [B] OFF")
+        self.btn_soft_select.setFixedHeight(21)
+        self.btn_soft_select.setToolTip(
+            "Toggle Maya Soft Selection (B) / Hold B + LMB-Drag Falloff Radius Ring"
+        )
+        self.btn_soft_select.clicked.connect(lambda: execute_shelf_item("soft_select"))
+        slay.addWidget(self.btn_soft_select)
+
         lbl_sym = QtWidgets.QLabel("✳ Symmetry OFF")
         lbl_sym.setStyleSheet("color: #747C87; font-size: 9px; font-weight: 600; padding: 0 3px;")
         slay.addWidget(lbl_sym)
@@ -685,7 +731,7 @@ class MayaShelfWidget:
         return sep
 
     def _on_menu_set_changed(self, idx: int) -> None:
-        tab_map = {0: 1, 1: 4, 2: 4, 3: 2, 4: 3}
+        tab_map = {0: 1, 1: 4, 2: 4, 3: 5, 4: 3}
         if idx in tab_map and tab_map[idx] < self.tabs.count():
             self.tabs.setCurrentIndex(tab_map[idx])
 
@@ -695,8 +741,8 @@ class MayaShelfWidget:
         preset_map = {
             0: "CHANNEL_BOX",
             1: "CHANNEL_BOX",
-            2: "SHAPE_EDITOR",
-            3: "MODELING_TOOLKIT",
+            2: "HYPERSHADE",
+            3: "SHAPE_EDITOR",
             4: "MAYA_INTERCHANGE",
         }
         if idx in preset_map:
@@ -735,7 +781,7 @@ class MayaShelfWidget:
             desktop.cycle_right_dock(target)
 
     def refresh_status(self) -> None:
-        from .. import modeling
+        from .. import continuity, modeling
 
         st = modeling.get_live_surface_state()
         if st.get("active") and st.get("object_name"):
@@ -750,6 +796,21 @@ class MayaShelfWidget:
                 "background-color: #1B3022; color: #B8EAC4; border: 1px solid #318B49; "
                 "border-radius: 10px; padding: 1px 9px; font-weight: 700; font-size: 9px;"
             )
+
+        soft_st = continuity.get_soft_selection_state()
+        if hasattr(self, "btn_soft_select"):
+            if soft_st.get("enabled"):
+                self.btn_soft_select.setText(f"◎ Soft [B]: {soft_st.get('radius', 1.0):.2f}m")
+                self.btn_soft_select.setStyleSheet(
+                    "background-color: #3D2810; color: #FAD075; border: 1px solid #C88A2E; "
+                    "border-radius: 9px; padding: 1px 7px; font-weight: 700; font-size: 9px;"
+                )
+            else:
+                self.btn_soft_select.setText("◎ Soft [B] OFF")
+                self.btn_soft_select.setStyleSheet(
+                    "background-color: #1D2126; color: #7C8590; border: 1px solid #2E333B; "
+                    "border-radius: 9px; padding: 1px 7px; font-weight: 600; font-size: 9px;"
+                )
 
         for tab_tiles in self.tile_buttons.values():
             for tile in tab_tiles:

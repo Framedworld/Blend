@@ -409,6 +409,62 @@ def apply_profile(context=None, profile: str = "MAYA") -> Dict[str, Any]:
                     props={"mode": sm_mode},
                 )
 
+            # 4 / 5 / 6 / 7 Maya Viewport 2.0 Shading (Wireframe / Smooth Shaded / Textured / Use All Lights)
+            for key_type, sh_mode in (
+                ("FOUR", "4"),
+                ("FIVE", "5"),
+                ("SIX", "6"),
+                ("SEVEN", "7"),
+            ):
+                _queue_mute(km_name, key_type)
+                _add_kmi(
+                    kc,
+                    km_name,
+                    space_type,
+                    "landfall_studio.viewport_shading",
+                    key_type,
+                    "PRESS",
+                    props={"mode": sh_mode},
+                )
+
+            # B -> Maya Soft Selection Toggle & Hold B + LMB-Drag Falloff Radius Ring
+            _queue_mute(km_name, "B")
+            _add_kmi(
+                kc,
+                km_name,
+                space_type,
+                "landfall_studio.soft_selection",
+                "B",
+                "PRESS",
+                props={"action": "MODAL_OR_TOGGLE"},
+            )
+
+            # Ctrl+Shift+A -> Conflict-free Select / Deselect All fallback (since A is Frame All and Ctrl+A is Channel Box/Attr Editor)
+            _queue_mute(km_name, "A", ctrl=True, shift=True)
+            _add_kmi(
+                kc,
+                km_name,
+                space_type,
+                "landfall_studio.select_all_toggle",
+                "A",
+                "PRESS",
+                ctrl=True,
+                shift=True,
+                props={"action": "TOGGLE"},
+            )
+
+            # DEL / BACK_SPACE -> Conflict-free Maya Smart Delete (since X is Hold Grid Snap)
+            for del_key in ("DEL", "BACK_SPACE"):
+                _queue_mute(km_name, del_key)
+                _add_kmi(
+                    kc,
+                    km_name,
+                    space_type,
+                    "landfall_studio.smart_delete",
+                    del_key,
+                    "PRESS",
+                )
+
             # F8–F12 Component Mode inside Object Mode & Mesh too (so mode keymaps never shadow 3D View)
             for fkey, cmode in (
                 ("F8", "TOGGLE"),
@@ -554,7 +610,7 @@ def apply_profile(context=None, profile: str = "MAYA") -> Dict[str, Any]:
                 props={"mode": "CYCLE"},
             )
 
-        # Also bind Ctrl+A in 3D View so it works in any 3D View mode
+        # Also bind Ctrl+A, Ctrl+Shift+Q (Quick Favorites), and Alt+Z (X-Ray) in 3D View
         _queue_mute("3D View", "A", ctrl=True)
         _add_kmi(
             kc,
@@ -566,8 +622,31 @@ def apply_profile(context=None, profile: str = "MAYA") -> Dict[str, Any]:
             ctrl=True,
             props={"mode": "CYCLE"},
         )
+        _queue_mute("3D View", "Q", ctrl=True, shift=True)
+        _add_kmi(
+            kc,
+            "3D View",
+            "VIEW_3D",
+            "wm.call_menu",
+            "Q",
+            "PRESS",
+            ctrl=True,
+            shift=True,
+            props={"name": "SCREEN_MT_user_menu"},
+        )
+        _queue_mute("3D View", "Z", alt=True)
+        _add_kmi(
+            kc,
+            "3D View",
+            "VIEW_3D",
+            "landfall_studio.viewport_shading",
+            "Z",
+            "PRESS",
+            alt=True,
+            props={"mode": "XRAY"},
+        )
 
-        # Ctrl+E in Mesh Edit Mode -> Landfall Extrude with Maya options
+        # Ctrl+E -> Landfall Extrude, Shift+F -> Make Edge/Face (re-homed from F) in Mesh Edit Mode
         _queue_mute("Mesh", "E", ctrl=True)
         _add_kmi(
             kc,
@@ -577,6 +656,16 @@ def apply_profile(context=None, profile: str = "MAYA") -> Dict[str, Any]:
             "E",
             "PRESS",
             ctrl=True,
+        )
+        _queue_mute("Mesh", "F", shift=True)
+        _add_kmi(
+            kc,
+            "Mesh",
+            "EMPTY",
+            "mesh.edge_face_add",
+            "F",
+            "PRESS",
+            shift=True,
         )
 
     _settle_keyconfigs(context)

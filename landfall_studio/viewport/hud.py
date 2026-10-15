@@ -143,19 +143,23 @@ def compute_poly_count_stats(context: Any = None) -> Dict[str, Any]:
     }
     tool_label = tool_map.get(cmd_registry.get_active_tool(), "Move (X)")
 
-    # Query Modeling state (Make Live, In-Viewport Caddy, Quad Draw)
+    # Query Modeling & Continuity state (Make Live, In-Viewport Caddy, Quad Draw, 4/5/6/7 Shading, Soft Selection B)
     live_name = ""
     live_active = False
     caddy_state: Dict[str, Any] = {"open": False}
     qd_state: Dict[str, Any] = {"active": False, "dots": []}
+    shading_state: Dict[str, Any] = {"maya_mode": "6", "wire_on_shaded": True, "xray": False}
+    soft_state: Dict[str, Any] = {"enabled": False, "radius": 1.0, "falloff_curve": "SMOOTH", "ring_overlay": {"active": False}}
     try:
-        from .. import modeling
+        from .. import continuity, modeling
 
         ls = modeling.get_live_surface_state()
         live_active = bool(ls.get("active"))
         live_name = str(ls.get("object_name") or "")
         caddy_state = modeling.get_active_caddy_state()
         qd_state = modeling.get_quad_draw_overlay_data()
+        shading_state = continuity.get_viewport_shading_state(ctx)
+        soft_state = continuity.get_soft_selection_state(ctx)
     except Exception:
         pass
 
@@ -183,13 +187,21 @@ def compute_poly_count_stats(context: Any = None) -> Dict[str, Any]:
             "caddy_values": dict(caddy_state.get("values", {})),
             "quad_draw_active": bool(qd_state.get("active")),
             "quad_draw_dot_count": len(qd_state.get("dots", [])),
+            "maya_shading_mode": shading_state.get("maya_mode", "6"),
+            "maya_shading_label": shading_state.get("maya_label", "Shaded & Textured [6]"),
+            "wire_on_shaded": bool(shading_state.get("wire_on_shaded", True)),
+            "xray": bool(shading_state.get("xray", False)),
+            "soft_select_enabled": bool(soft_state.get("enabled", False)),
+            "soft_select_radius": float(soft_state.get("radius", 1.0)),
+            "soft_select_falloff": str(soft_state.get("falloff_curve", "SMOOTH")),
+            "soft_select_ring": dict(soft_state.get("ring_overlay", {})),
         }
     )
     return dict(_last_hud_stats)
 
 
 def get_hud_state(context: Any = None) -> Dict[str, Any]:
-    """Return the latest Poly Count, Live Surface, Caddy, & Viewport HUD state dictionary."""
+    """Return the latest Poly Count, Live Surface, Caddy, Shading (`4/5/6/7`), Soft Select (`B`), & Viewport HUD state dictionary."""
     return compute_poly_count_stats(context)
 
 
@@ -216,6 +228,50 @@ def _draw_border_2d(shader, x: float, y: float, w: float, h: float, thickness: f
     _draw_rect_2d(shader, x, y, w, thickness, color)
     _draw_rect_2d(shader, x, y, thickness, h, color)
     _draw_rect_2d(shader, x + w - thickness, y, thickness, h, color)
+
+
+def _draw_circle_ring_2d(
+    shader,
+    cx: float,
+    cy: float,
+    radius: float,
+    color,
+    segments: int = 56,
+    thickness: float = 2.2,
+    dashed: bool = False,
+):
+    import math
+    from gpu_extras.batch import batch_for_shader
+
+    r_in = max(1.0, radius - thickness * 0.5)
+    r_out = radius + thickness * 0.5
+    verts = []
+    indices = []
+    v_idx = 0
+    for i in range(segments):
+        if dashed and (i % 2 == 1):
+            continue
+        a0 = (2.0 * math.pi * i) / segments
+        a1 = (2.0 * math.pi * (i + 1)) / segments
+        c0, s0 = math.cos(a0), math.sin(a0)
+        c1, s1 = math.cos(a1), math.sin(a1)
+        verts.extend(
+            (
+                (cx + c0 * r_in, cy + s0 * r_in),
+                (cx + c0 * r_out, cy + s0 * r_out),
+                (cx + c1 * r_out, cy + s1 * r_out),
+                (cx + c1 * r_in, cy + s1 * r_in),
+            )
+        )
+        indices.append((v_idx, v_idx + 1, v_idx + 2))
+        indices.append((v_idx, v_idx + 2, v_idx + 3))
+        v_idx += 4
+    if not verts:
+        return
+    batch = batch_for_shader(shader, "TRIS", {"pos": verts}, indices=indices)
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
 
 
 def _draw_maya_hud_callback():
@@ -260,32 +316,44 @@ def _draw_maya_hud_callback():
         mw, _ = blf.dimensions(font_id, m_txt)
         menu_x += mw + 14.0
 
-    # Divider + Viewport Quick Toggles (Wireframe on Shaded | Textured | Use All Lights | Viewport 2.0)
+    # Divider + Viewport Quick Toggles (4/5/6/7 Shading + Wire on Shaded + X-Ray + Soft Select [B])
     _draw_rect_2d(shader, menu_x - 4.0, strip_y + 5.0, 1.0, 16.0, (0.20, 0.23, 0.27, 0.95))
     menu_x += 6.0
 
-    for b_txt, b_active in (
-        ("Wire on Shaded", True),
-        ("Textured [6]", True),
-        ("All Lights [7]", False),
-        ("X-Ray", False),
-        ("Isolate", False),
+    maya_sh = str(stats.get("maya_shading_mode", "6"))
+    wire_on = bool(stats.get("wire_on_shaded", True))
+    xray_on = bool(stats.get("xray", False))
+    soft_on = bool(stats.get("soft_select_enabled", False))
+    soft_rad = float(stats.get("soft_select_radius", 1.0))
+
+    for b_txt, b_active, is_amber in (
+        ("Wire [4]", maya_sh == "4", False),
+        ("Shaded [5]", maya_sh == "5", False),
+        ("Textured [6]", maya_sh == "6", False),
+        ("All Lights [7]", maya_sh == "7", False),
+        ("Wire on Shaded", wire_on, False),
+        ("X-Ray [Alt+Z]", xray_on, False),
+        (f"Soft Select [B]: {soft_rad:.2f}m" if soft_on else "Soft Select [B]", soft_on, True),
     ):
         bw, _ = blf.dimensions(font_id, b_txt)
-        pill_w = bw + 12.0
-        if menu_x + pill_w < rw - 150.0:
-            if b_active:
+        pill_w = bw + 11.0
+        if menu_x + pill_w < rw - 145.0:
+            if b_active and is_amber:
+                _draw_rect_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, (0.28, 0.19, 0.08, 0.94))
+                _draw_border_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, 1.0, (0.94, 0.66, 0.22, 0.92))
+                blf.color(font_id, 0.99, 0.82, 0.44, 1.0)
+            elif b_active:
                 _draw_rect_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, (0.14, 0.24, 0.33, 0.92))
                 _draw_border_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, 1.0, (0.22, 0.64, 0.85, 0.88))
                 blf.color(font_id, 0.56, 0.84, 0.98, 1.0)
             else:
                 _draw_rect_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, (0.10, 0.11, 0.13, 0.78))
                 blf.color(font_id, 0.58, 0.63, 0.69, 0.90)
-            blf.position(font_id, menu_x + 6.0, strip_y + 8.0, 0)
+            blf.position(font_id, menu_x + 5.5, strip_y + 8.0, 0)
             blf.draw(font_id, b_txt)
-            menu_x += pill_w + 5.0
+            menu_x += pill_w + 4.0
 
-    # Right-side Renderer badge ("Viewport 2.0 (DirectX 11 / OpenGL)")
+    # Right-side Renderer badge ("Viewport 2.0  •  sRGB gamma")
     vp_badge = "Viewport 2.0  •  sRGB gamma"
     vpw, _ = blf.dimensions(font_id, vp_badge)
     if rw > 420.0:
@@ -368,6 +436,8 @@ def _draw_maya_hud_callback():
         capsule_txt = f"●  LIVE SURFACE   •   {mode_upper}   •   {stats['tool_label']}"
     if stats.get("quad_draw_active"):
         capsule_txt += "   •   QUAD DRAW"
+    if soft_on:
+        capsule_txt += f"   •   SOFT SELECT [B]: {soft_rad:.2f}m"
 
     blf.size(font_id, 10.5)
     tw, _ = blf.dimensions(font_id, capsule_txt)
@@ -378,6 +448,50 @@ def _draw_maya_hud_callback():
     blf.color(font_id, 0.49, 0.89, 0.66, 1.0)
     blf.position(font_id, bx + 14.0, by + 1.0, 0)
     blf.draw(font_id, capsule_txt)
+
+    # 2b. Maya Soft Selection Falloff Ring & Heatmap Callout (when Soft Selection [B] is active)
+    ring_info = stats.get("soft_select_ring", {})
+    if soft_on or ring_info.get("active"):
+        rcx = float(ring_info.get("center_x") or (rw * 0.48))
+        rcy = float(ring_info.get("center_y") or (rh * 0.52))
+        if rcx <= 1.0 and rcy <= 1.0:
+            rcx, rcy = rw * 0.48, rh * 0.52
+        try:
+            from bpy_extras.view3d_utils import location_3d_to_region_2d
+
+            r3d = getattr(space, "region_3d", None)
+            act_o = active_obj.active if active_obj else None
+            if not ring_info.get("active") and r3d is not None and act_o is not None:
+                p2d = location_3d_to_region_2d(region, r3d, act_o.matrix_world.translation)
+                if p2d is not None:
+                    rcx, rcy = float(p2d[0]), float(p2d[1])
+        except Exception:
+            pass
+        outer_r = max(68.0, min(195.0, soft_rad * 54.0))
+        mid_r = outer_r * 0.66
+        inner_r = outer_r * 0.34
+        # Maya Soft Selection falloff gradient: Inner Yellow (1.0) -> Mid Orange (0.5) -> Outer Crimson Red (0.0 boundary)
+        _draw_circle_ring_2d(
+            shader, rcx, rcy, outer_r, (0.94, 0.24, 0.22, 0.88), segments=64, thickness=2.2, dashed=True
+        )
+        _draw_circle_ring_2d(
+            shader, rcx, rcy, mid_r, (0.98, 0.56, 0.16, 0.84), segments=56, thickness=2.0, dashed=False
+        )
+        _draw_circle_ring_2d(
+            shader, rcx, rcy, inner_r, (0.99, 0.86, 0.24, 0.92), segments=44, thickness=2.2, dashed=False
+        )
+
+        falloff_curve = str(stats.get("soft_select_falloff", "SMOOTH"))
+        tag_txt = f"SOFT SELECT [B]   •   Radius: {soft_rad:.2f}m   •   Falloff: {falloff_curve}"
+        blf.size(font_id, 9.5)
+        ttw, _ = blf.dimensions(font_id, tag_txt)
+        tx = max(pad_x, min(rcx - ttw * 0.5 - 8.0, rw - ttw - 24.0))
+        ty = max(46.0, rcy - outer_r - 26.0)
+        _draw_rect_2d(shader, tx, ty, ttw + 16.0, 19.0, (0.14, 0.11, 0.07, 0.92))
+        _draw_border_2d(shader, tx, ty, ttw + 16.0, 19.0, 1.0, (0.94, 0.66, 0.22, 0.90))
+        blf.color(font_id, 0.99, 0.84, 0.46, 1.0)
+        blf.position(font_id, tx + 8.0, ty + 5.0, 0)
+        blf.draw(font_id, tag_txt)
 
     # 3. Quad Draw Plotted Construction Dots in 3D Viewport
     try:

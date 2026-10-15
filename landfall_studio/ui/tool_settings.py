@@ -120,6 +120,7 @@ def set_tool_setting(key: str, value: Any, context: Any = None) -> Dict[str, Any
         ts.transform_pivot_point = str(value).upper()
     elif k in ("soft_select_enabled", "soft_select") and ts is not None:
         ts.use_proportional_edit = bool(value)
+        ts.use_proportional_edit_objects = bool(value)
     elif k in ("soft_select_radius", "falloff_radius") and ts is not None:
         ts.proportional_size = max(0.001, float(value))
     elif k == "soft_select_falloff" and ts is not None:
@@ -139,6 +140,13 @@ def set_tool_setting(key: str, value: Any, context: Any = None) -> Dict[str, Any
         return {"ok": False, "error": f"Unknown tool setting '{key}'"}
 
     refresh_tool_settings_widget()
+    try:
+        from . import outliner, shelf
+
+        shelf.refresh_top_shelf_status()
+        outliner.refresh_outliner()
+    except Exception:
+        pass
     return get_tool_settings_snapshot(ctx)
 
 

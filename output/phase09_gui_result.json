@@ -1,0 +1,174 @@
+{
+  "ok": true,
+  "shading_modes_verified": {
+    "4": "WIREFRAME",
+    "5": "SMOOTH_SHADED",
+    "6": "TEXTURED",
+    "7": "ALL_LIGHTS"
+  },
+  "soft_selection": {
+    "ok": true,
+    "enabled": true,
+    "object_mode_enabled": true,
+    "radius": 2.35,
+    "falloff_curve": "SMOOTH",
+    "ring_overlay": {
+      "active": false,
+      "center_x": 0.0,
+      "center_y": 0.0,
+      "radius_px": 89.3,
+      "world_radius": 2.35
+    }
+  },
+  "native_bridges": {
+    "geometry_nodes": {
+      "ok": true,
+      "target": "GEOMETRY_NODES",
+      "label": "Geometry Nodes",
+      "editor_ui_type": "GeometryNodeTree",
+      "mode_after": "OBJECT",
+      "geometry_nodes": {
+        "ok": true,
+        "object_name": "pCylinder1",
+        "modifier_name": "GeometryNodes",
+        "node_group_name": "pCylinder1_GeoNodes",
+        "node_count": 2
+      }
+    }
+  },
+  "keymap_scan": {
+    "clean": true,
+    "active_profile": "MAYA",
+    "studio_keymap_item_count": 77,
+    "muted_native_item_count": 29,
+    "tentacle_key_info": {
+      "active": true,
+      "addon_key_type": "SPACE",
+      "active_vk": 32,
+      "qt_key": "Key_Space",
+      "keymap_count": 2
+    },
+    "space_hotbox_bindings": [
+      {
+        "keymap": "3D View",
+        "idname": "tentacle.show_marking_menu"
+      }
+    ],
+    "duplicate_hotbox_on_space": false,
+    "unmuted_space_conflicts": [],
+    "rmb_menu_bindings": [
+      {
+        "keymap": "Object Mode",
+        "key": "RIGHTMOUSE",
+        "ctrl": false,
+        "shift": false,
+        "alt": false,
+        "menu_mode": "COMPONENT"
+      },
+      {
+        "keymap": "Object Mode",
+        "key": "RIGHTMOUSE",
+        "ctrl": false,
+        "shift": true,
+        "alt": false,
+        "menu_mode": "TOOL"
+      },
+      {
+        "keymap": "Object Mode",
+        "key": "RIGHTMOUSE",
+        "ctrl": true,
+        "shift": false,
+        "alt": false,
+        "menu_mode": "CONVERT"
+      },
+      {
+        "keymap": "Mesh",
+        "key": "RIGHTMOUSE",
+        "ctrl": false,
+        "shift": false,
+        "alt": false,
+        "menu_mode": "COMPONENT"
+      },
+      {
+        "keymap": "Mesh",
+        "key": "RIGHTMOUSE",
+        "ctrl": false,
+        "shift": true,
+        "alt": false,
+        "menu_mode": "TOOL"
+      },
+      {
+        "keymap": "Mesh",
+        "key": "RIGHTMOUSE",
+        "ctrl": true,
+        "shift": false,
+        "alt": false,
+        "menu_mode": "CONVERT"
+      }
+    ],
+    "protected_context_leaks": [],
+    "duplicate_studio_bindings": [],
+    "truncated_user_keymaps": []
+  },
+  "desktop_restore": {
+    "ok": true,
+    "areas_before": 4,
+    "areas_after": 5,
+    "right_dock_mode": "CHANNEL_BOX",
+    "top_shelf_docked": true,
+    "left_outliner_docked": true,
+    "time_slider_docked": true,
+    "hotkey_filter_installed": true
+  },
+  "shadowed_shortcut_count": 10,
+  "composited_docks": [
+    "top_shelf",
+    "left_outliner",
+    "right_sidebar",
+    "time_slider"
+  ],
+  "hud_state": {
+    "enabled": true,
+    "verts_total": 1173,
+    "edges_total": 2308,
+    "faces_total": 1138,
+    "tris_total": 2324,
+    "uvs_total": 0,
+    "verts_sel": 1148,
+    "edges_sel": 2268,
+    "faces_sel": 1122,
+    "tris_sel": 2292,
+    "uvs_sel": 0,
+    "camera_label": "persp",
+    "mode_label": "Object",
+    "tool_label": "Move (X)",
+    "live_surface_active": true,
+    "live_surface_name": "pPlane_LiveBase",
+    "caddy_open": true,
+    "caddy_tool_id": "BEVEL",
+    "caddy_node_title": "polyBevel1",
+    "caddy_values": {
+      "width": 0.15,
+      "segments": 2,
+      "profile": 0.5,
+      "clamp_overlap": true
+    },
+    "quad_draw_active": false,
+    "quad_draw_dot_count": 0,
+    "maya_shading_mode": "5",
+    "maya_shading_label": "Smooth Shaded [5]",
+    "wire_on_shaded": true,
+    "xray": false,
+    "soft_select_enabled": true,
+    "soft_select_radius": 2.35,
+    "soft_select_falloff": "SMOOTH",
+    "soft_select_ring": {
+      "active": false,
+      "center_x": 0.0,
+      "center_y": 0.0,
+      "radius_px": 89.3,
+      "world_radius": 2.35
+    }
+  },
+  "screenshot": "C:\\Users\\mattk\\Documents\\Landfall\\Landfall_Studio_Agent_Pack\\landfall_studio_agent_pack\\output\\phase09_maya_continuity_soft_select_gui.png"
+}
