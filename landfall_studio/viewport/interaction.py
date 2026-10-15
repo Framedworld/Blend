@@ -160,7 +160,7 @@ def raycast_mesh_at_region_xy(
 
 
 def snap_object_pivot_world(obj, target_world: mathutils.Vector) -> mathutils.Vector:
-    """Move `obj`'s origin/pivot to `target_world` without moving world-space geometry or child objects."""
+    """Move `obj`'s origin/pivot to `target_world` without moving world-space geometry, shape keys, instanced copies, or child objects."""
     if obj is None or obj.type != "MESH" or obj.data is None:
         raise ValueError("Pivot snap requires an active MESH object.")
 
@@ -176,8 +176,24 @@ def snap_object_pivot_world(obj, target_world: mathutils.Vector) -> mathutils.Ve
     # Convert new world origin into local-space offset for vertices
     new_origin_local = inv_old_world @ target_vec
 
-    # Preserve direct children world matrices
+    # Find any instanced mesh users sharing obj.data so their world-space geometry does not shift
+    instanced_users = [
+        o for o in bpy.data.objects
+        if o is not obj and getattr(o, "type", "") == "MESH" and o.data is obj.data
+    ]
+
+    # Preserve direct children world matrices (for obj and any instanced users)
     children_world = [(child, child.matrix_world.copy()) for child in obj.children]
+    for inst_obj in instanced_users:
+        for child in inst_obj.children:
+            children_world.append((child, child.matrix_world.copy()))
+
+    sk = getattr(obj.data, "shape_keys", None)
+    kb_pre_first = {}
+    if sk is not None and sk.key_blocks:
+        for kb in sk.key_blocks:
+            if len(kb.data) > 0:
+                kb_pre_first[kb.name] = kb.data[0].co.copy()
 
     if obj.mode == "EDIT":
         bm = bmesh.from_edit_mesh(obj.data)
@@ -187,10 +203,30 @@ def snap_object_pivot_world(obj, target_world: mathutils.Vector) -> mathutils.Ve
         obj.data.transform(mathutils.Matrix.Translation(-new_origin_local))
         obj.data.update()
 
+    # Ensure all shape keys (Basis and all non-basis targets) are shifted by -new_origin_local
+    if sk is not None and sk.key_blocks:
+        for kb in sk.key_blocks:
+            if len(kb.data) == 0:
+                continue
+            pre_co0 = kb_pre_first.get(kb.name)
+            expected_co0 = (pre_co0 - new_origin_local) if pre_co0 is not None else None
+            if expected_co0 is not None and (kb.data[0].co - expected_co0).length > 1e-6:
+                for pt in kb.data:
+                    pt.co -= new_origin_local
+        sk.update_tag()
+
     # Update object world translation
     new_world_mat = old_world_mat.copy()
     new_world_mat.translation = target_vec
     obj.matrix_world = new_world_mat
+
+    # Counter-translate any instanced objects sharing obj.data so their world-space vertices remain stationary
+    local_shift_mat = mathutils.Matrix.Translation(new_origin_local)
+    for inst_obj in instanced_users:
+        try:
+            inst_obj.matrix_world = inst_obj.matrix_world @ local_shift_mat
+        except Exception:
+            pass
 
     for child, c_world in children_world:
         try:
@@ -278,7 +314,7 @@ def compute_pivot_snap_target(
             (
                 round(loc.x / cell) * cell,
                 round(loc.y / cell) * cell,
-                0.0,
+                round(loc.z / cell) * cell,
             )
         )
 
@@ -953,10 +989,45 @@ class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
 
         targets = list(context.selected_objects)
         active = context.view_layer.objects.active
-        if not targets and active is not None:
-            targets = [active]
+        if active is not None and active not in targets:
+            targets.append(active)
 
         for obj in targets:
+            if getattr(obj, "mode", "OBJECT") == "EDIT" and getattr(obj, "type", "") == "MESH" and obj.data is not None:
+                bm = bmesh.from_edit_mesh(obj.data)
+                bm.verts.ensure_lookup_table()
+                sel_verts = [v for v in bm.verts if v.select]
+                if not sel_verts:
+                    continue
+                if tool == "TRANSLATE":
+                    vec = mathutils.Vector((0.0, 0.0, 0.0))
+                    if axis == "VIEW":
+                        vec.x = delta_val
+                        vec.y = delta_val
+                    else:
+                        vec[idx] = delta_val
+                    for v in sel_verts:
+                        v.co += vec
+                elif tool == "ROTATE":
+                    center = sum((v.co for v in sel_verts), mathutils.Vector((0.0, 0.0, 0.0))) / len(sel_verts)
+                    rot_axis = "Z" if axis == "VIEW" else (axis if axis in ("X", "Y", "Z") else "X")
+                    rot_mat = mathutils.Matrix.Rotation(delta_val, 3, rot_axis)
+                    for v in sel_verts:
+                        v.co = center + rot_mat @ (v.co - center)
+                elif tool == "RESIZE":
+                    center = sum((v.co for v in sel_verts), mathutils.Vector((0.0, 0.0, 0.0))) / len(sel_verts)
+                    factor = max(0.001, 1.0 + delta_val)
+                    for v in sel_verts:
+                        diff = v.co - center
+                        if axis == "VIEW":
+                            v.co = center + diff * factor
+                        else:
+                            diff[idx] *= factor
+                            v.co = center + diff
+                bm.normal_update()
+                bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+                continue
+
             if tool == "TRANSLATE":
                 if axis == "VIEW":
                     obj.location.x += delta_val
@@ -990,26 +1061,43 @@ class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
             return {"PASS_THROUGH"}
 
         targets = list(context.selected_objects)
-        if not targets and context.view_layer.objects.active is not None:
-            targets = [context.view_layer.objects.active]
+        active = context.view_layer.objects.active
+        if active is not None and active not in targets:
+            targets.append(active)
         if not targets:
             return {"PASS_THROUGH"}
 
         self._start_x = event.mouse_region_x
         self._last_x = event.mouse_region_x
-        self._snapshots = [
-            (o, o.location.copy(), o.rotation_euler.copy(), o.scale.copy())
-            for o in targets
-        ]
+        self._snapshots = []
+        for o in targets:
+            edit_verts = None
+            if getattr(o, "mode", "OBJECT") == "EDIT" and getattr(o, "type", "") == "MESH" and o.data is not None:
+                try:
+                    bm = bmesh.from_edit_mesh(o.data)
+                    bm.verts.ensure_lookup_table()
+                    edit_verts = [v.co.copy() for v in bm.verts]
+                except Exception:
+                    edit_verts = None
+            self._snapshots.append(
+                (o, o.location.copy(), o.rotation_euler.copy(), o.scale.copy(), edit_verts)
+            )
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
     def _rollback(self):
-        for o, loc, rot, sca in getattr(self, "_snapshots", []):
+        for o, loc, rot, sca, edit_verts in getattr(self, "_snapshots", []):
             try:
                 o.location = loc
                 o.rotation_euler = rot
                 o.scale = sca
+                if edit_verts is not None and getattr(o, "mode", "OBJECT") == "EDIT" and o.data is not None:
+                    bm = bmesh.from_edit_mesh(o.data)
+                    bm.verts.ensure_lookup_table()
+                    for v, saved_co in zip(bm.verts, edit_verts):
+                        v.co = saved_co
+                    bm.normal_update()
+                    bmesh.update_edit_mesh(o.data, loop_triangles=False, destructive=False)
             except Exception:
                 pass
 

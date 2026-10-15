@@ -158,17 +158,25 @@ def ensure_base_animation_layer(obj: Any = None) -> Dict[str, Any]:
     if base_track is None:
         base_track = adt.nla_tracks.new()
         base_track.name = "BaseAnimation"
-        if adt.action is not None:
+        has_existing_action = adt.action is not None
+        if has_existing_action:
             act = adt.action
             adt.action = None
+            try:
+                act_range = act.frame_range
+                s_start = min(f_start, int(act_range[0]))
+                s_end = max(f_end, int(round(float(act_range[1]))))
+            except Exception:
+                s_start, s_end = f_start, f_end
         else:
             act = bpy.data.actions.new(name=f"{target.name}_BaseAnimation")
             _ensure_fcurve_on_action(act, target, "location", 0)
-        strip = base_track.strips.new(name="BaseAnimation", start=f_start, action=act)
+            s_start, s_end = f_start, f_end
+        strip = base_track.strips.new(name="BaseAnimation", start=s_start, action=act)
         _ensure_strip_slot(strip, act, target)
         strip.blend_type = "REPLACE"
         strip.extrapolation = "HOLD"
-        _sync_strip_range(strip, f_start, f_end)
+        _sync_strip_range(strip, s_start, s_end)
 
     return {
         "ok": True,

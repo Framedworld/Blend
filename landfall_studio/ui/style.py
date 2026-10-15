@@ -381,11 +381,95 @@ def _save_and_set_color(owner: Any, attr: str, rgba_or_rgb: Tuple[float, ...]) -
         pass
 
 
+_save_pre_restored_spaces: List[Tuple[Any, bool, bool, bool, bool]] = []
+
+
+def _on_save_pre_restore_viewport_headers(*_args) -> None:
+    """Temporarily restore 3D Viewport headers, toolbars, and overlay text before saving a `.blend` file so saved files never hide Blender chrome for colleagues without Studio."""
+    global _save_pre_restored_spaces
+    _save_pre_restored_spaces.clear()
+    if not _theme_applied:
+        return
+    try:
+        import bpy
+
+        wm = getattr(bpy.context, "window_manager", None)
+        for win in (wm.windows if wm else []):
+            if not win.screen:
+                continue
+            for area in win.screen.areas:
+                if area.type == "VIEW_3D":
+                    sp = area.spaces.active
+                    if sp is not None:
+                        cur_tb = bool(getattr(sp, "show_region_toolbar", False))
+                        cur_hdr = bool(getattr(sp, "show_region_header", False))
+                        cur_thdr = bool(getattr(sp, "show_region_tool_header", False))
+                        cur_txt = bool(getattr(getattr(sp, "overlay", None), "show_text", False))
+                        _save_pre_restored_spaces.append((sp, cur_tb, cur_hdr, cur_thdr, cur_txt))
+                        try:
+                            sp.show_region_toolbar = True
+                            if hasattr(sp, "show_region_header"):
+                                sp.show_region_header = True
+                            if hasattr(sp, "show_region_tool_header"):
+                                sp.show_region_tool_header = True
+                            if hasattr(sp, "overlay") and hasattr(sp.overlay, "show_text"):
+                                sp.overlay.show_text = True
+                        except Exception:
+                            pass
+    except Exception:
+        pass
+
+
+def _on_save_post_reapply_viewport_headers(*_args) -> None:
+    """Re-apply Studio clean viewport state after `.blend` save completes."""
+    global _save_pre_restored_spaces
+    if not _save_pre_restored_spaces:
+        return
+    try:
+        for sp, cur_tb, cur_hdr, cur_thdr, cur_txt in _save_pre_restored_spaces:
+            try:
+                sp.show_region_toolbar = cur_tb
+                if hasattr(sp, "show_region_header"):
+                    sp.show_region_header = cur_hdr
+                if hasattr(sp, "show_region_tool_header"):
+                    sp.show_region_tool_header = cur_thdr
+                if hasattr(sp, "overlay") and hasattr(sp.overlay, "show_text"):
+                    sp.overlay.show_text = cur_txt
+            except Exception:
+                pass
+    finally:
+        _save_pre_restored_spaces.clear()
+
+
+def _ensure_save_handlers_registered() -> None:
+    try:
+        import bpy
+
+        if _on_save_pre_restore_viewport_headers not in bpy.app.handlers.save_pre:
+            bpy.app.handlers.save_pre.append(_on_save_pre_restore_viewport_headers)
+        if _on_save_post_reapply_viewport_headers not in bpy.app.handlers.save_post:
+            bpy.app.handlers.save_post.append(_on_save_post_reapply_viewport_headers)
+    except Exception:
+        pass
+
+
+def _remove_save_handlers() -> None:
+    try:
+        import bpy
+
+        if _on_save_pre_restore_viewport_headers in bpy.app.handlers.save_pre:
+            bpy.app.handlers.save_pre.remove(_on_save_pre_restore_viewport_headers)
+        if _on_save_post_reapply_viewport_headers in bpy.app.handlers.save_post:
+            bpy.app.handlers.save_post.remove(_on_save_post_reapply_viewport_headers)
+    except Exception:
+        pass
+
+
 def apply_modern_maya_theme_to_blender(
     context: Any = None,
     hide_stock_view3d_toolbar: bool = True,
 ) -> Dict[str, Any]:
-    """Harmonize Blender's native chrome and 3D Viewport with the Figma Make Modern Maya dark-slate/teal palette."""
+    """Harmonize Blender's native chrome and 3D Viewport with the Figma Make Modern Maya dark-slate/teal palette (without dirtying userpref.blend)."""
     global _theme_applied
     try:
         import bpy
@@ -396,6 +480,9 @@ def apply_modern_maya_theme_to_blender(
     prefs = getattr(ctx, "preferences", None)
     if prefs is None or not prefs.themes:
         return {"ok": False, "applied": False}
+
+    was_dirty = bool(getattr(prefs, "is_dirty", False))
+    _ensure_save_handlers_registered()
 
     theme = prefs.themes[0]
     if not _theme_applied:
@@ -430,6 +517,11 @@ def apply_modern_maya_theme_to_blender(
                     _save_and_set_color(wcol, "inner_sel", (0.133, 0.349, 0.463, 1.0))
 
         _theme_applied = True
+
+    try:
+        prefs.is_dirty = was_dirty
+    except Exception:
+        pass
 
     # 4. Hide stock Blender left 'T' toolbar and overlapping 'User Perspective' text in 3D Viewport
     hidden_toolbars = 0
@@ -480,6 +572,20 @@ def apply_modern_maya_theme_to_blender(
 def restore_blender_theme(context: Any = None) -> Dict[str, Any]:
     """Reversibly restore all Blender theme colors and viewport region flags modified by Studio."""
     global _theme_applied
+    _remove_save_handlers()
+
+    prefs = None
+    was_dirty = False
+    try:
+        import bpy
+
+        ctx = context or bpy.context
+        prefs = getattr(ctx, "preferences", None)
+        if prefs is not None:
+            was_dirty = bool(getattr(prefs, "is_dirty", False))
+    except Exception:
+        pass
+
     restored = 0
     for owner, attr, saved_val in reversed(_saved_theme_attrs):
         try:
@@ -489,33 +595,41 @@ def restore_blender_theme(context: Any = None) -> Dict[str, Any]:
             pass
     _saved_theme_attrs.clear()
 
+    if prefs is not None:
+        try:
+            prefs.is_dirty = was_dirty
+        except Exception:
+            pass
+
     try:
         import bpy
 
-        if getattr(bpy.context, "window", None) is not None:
-            saved_map = {}
-            for item in _saved_region_flags:
-                if len(item) >= 5:
-                    saved_map[item[0]] = (item[1], item[2], item[3], item[4])
-                else:
-                    saved_map[item[0]] = (item[1], item[2], True, True)
-            wm = getattr(bpy.context, "window_manager", None)
-            for win in (wm.windows if wm else []):
-                if not win.screen:
-                    continue
-                for area in win.screen.areas:
-                    if area.type == "VIEW_3D":
-                        sp = area.spaces.active
-                        if sp is not None and int(sp.as_pointer()) in saved_map:
-                            tb, _ui, hdr, thdr = saved_map[int(sp.as_pointer())]
-                            try:
-                                sp.show_region_toolbar = tb
-                                if hasattr(sp, "show_region_header"):
-                                    sp.show_region_header = hdr
-                                if hasattr(sp, "show_region_tool_header"):
-                                    sp.show_region_tool_header = thdr
-                            except Exception:
-                                pass
+        saved_map = {}
+        for item in _saved_region_flags:
+            if len(item) >= 5:
+                saved_map[item[0]] = (item[1], item[2], item[3], item[4])
+            else:
+                saved_map[item[0]] = (item[1], item[2], True, True)
+        wm = getattr(bpy.context, "window_manager", None)
+        for win in (wm.windows if wm else []):
+            if not win.screen:
+                continue
+            for area in win.screen.areas:
+                if area.type == "VIEW_3D":
+                    sp = area.spaces.active
+                    if sp is not None:
+                        # Fallback to standard visible regions (True, False, True, True) if file was reloaded and pointer changed
+                        tb, _ui, hdr, thdr = saved_map.get(int(sp.as_pointer()), (True, False, True, True))
+                        try:
+                            sp.show_region_toolbar = tb
+                            if hasattr(sp, "show_region_header"):
+                                sp.show_region_header = hdr
+                            if hasattr(sp, "show_region_tool_header"):
+                                sp.show_region_tool_header = thdr
+                            if hasattr(sp, "overlay") and hasattr(sp.overlay, "show_text"):
+                                sp.overlay.show_text = True
+                        except Exception:
+                            pass
     except Exception:
         pass
 

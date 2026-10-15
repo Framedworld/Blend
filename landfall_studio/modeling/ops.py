@@ -29,9 +29,15 @@ if bpy is not None:
             ),
             default="EXTRUDE",
         )
+        tool_id: bpy.props.StringProperty(
+            name="Tool ID",
+            default="",
+            options={"SKIP_SAVE"},
+        )
 
         def execute(self, context):
-            res = caddy.invoke_modeling_caddy(self.tool_type)
+            chosen_tool = (self.tool_id or self.tool_type or "EXTRUDE").strip().upper()
+            res = caddy.invoke_modeling_caddy(chosen_tool)
             if not res.get("ok"):
                 self.report({"WARNING"}, res.get("error", "Modeling caddy failed."))
                 return {"CANCELLED"}
@@ -199,7 +205,11 @@ if bpy is not None:
                     coord = (event.mouse_region_x, event.mouse_region_y)
                     ray_origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, coord)
                     ray_vec = view3d_utils.region_2d_to_vector_3d(region, rv3d, coord)
-                    pt_3d = ray_origin + ray_vec * 4.0
+                    hit_info = live_surface.raycast_live_surface(
+                        (ray_origin.x, ray_origin.y, ray_origin.z),
+                        (ray_vec.x, ray_vec.y, ray_vec.z),
+                    )
+                    hit_loc = hit_info.get("location", (0.0, 0.0, 0.0))
 
                     if event.shift and not event.ctrl:
                         if len(quad_draw.get_quad_draw_dots()) >= 4:
@@ -209,13 +219,71 @@ if bpy is not None:
                     elif event.ctrl and not event.shift:
                         quad_draw.insert_quad_draw_loop(edge_index=0, factor=0.5)
                     else:
-                        quad_draw.plot_quad_draw_dot((pt_3d.x, pt_3d.y, pt_3d.z))
+                        quad_draw.plot_quad_draw_dot(hit_loc)
 
                     if context.area:
                         context.area.tag_redraw()
                     return {"RUNNING_MODAL"}
 
             return {"PASS_THROUGH"}
+
+    class LANDFALL_STUDIO_OT_quad_draw(LANDFALL_STUDIO_OT_quad_draw_modal):
+        """Alias operator (`landfall_studio.quad_draw`) for Maya Shift+RMB Marking Menu & Shelf."""
+
+        bl_idname = "landfall_studio.quad_draw"
+        bl_label = "Maya Quad Draw"
+
+    class LANDFALL_STUDIO_OT_center_pivot_guarded(bpy.types.Operator):
+        """Maya `Modify > Center Pivot` (`CENTER` or `BOTTOM`) with animated transform guard."""
+
+        bl_idname = "landfall_studio.center_pivot_guarded"
+        bl_label = "Center Pivot (Guarded)"
+        bl_description = "Center or bottom-align object pivot while guarding animated transforms"
+        bl_options = {"REGISTER", "UNDO"}
+
+        mode: bpy.props.StringProperty(name="Mode", default="CENTER")
+        allow_animated: bpy.props.BoolProperty(name="Allow Animated", default=False)
+
+        def execute(self, context):
+            from ..adapters import btk_bridge
+            res = btk_bridge.center_pivot_guarded(mode=self.mode, allow_animated=bool(self.allow_animated))
+            if not res.get("ok"):
+                self.report({"WARNING"}, res.get("reason") or res.get("error", "Center Pivot blocked."))
+                return {"CANCELLED"}
+            return {"FINISHED"}
+
+    class LANDFALL_STUDIO_OT_freeze_transformations_guarded(bpy.types.Operator):
+        """Maya `Modify > Freeze Transformations` with animated transform & negative-scale guard."""
+
+        bl_idname = "landfall_studio.freeze_transformations_guarded"
+        bl_label = "Freeze Transformations (Guarded)"
+        bl_description = "Freeze object location, rotation, and scale while guarding animated transforms and negative scale"
+        bl_options = {"REGISTER", "UNDO"}
+
+        allow_animated: bpy.props.BoolProperty(name="Allow Animated", default=False)
+
+        def execute(self, context):
+            from ..adapters import btk_bridge
+            res = btk_bridge.freeze_transformations_guarded(allow_animated=bool(self.allow_animated))
+            if not res.get("ok"):
+                self.report({"WARNING"}, res.get("reason") or res.get("error", "Freeze Transformations blocked."))
+                return {"CANCELLED"}
+            return {"FINISHED"}
+
+    class LANDFALL_STUDIO_OT_uv_unwrap_pack(bpy.types.Operator):
+        """Auto Unwrap & Pack UV islands via `blendertk.UvUtils`."""
+
+        bl_idname = "landfall_studio.uv_unwrap_pack"
+        bl_label = "Auto Unwrap & Pack UVs"
+        bl_description = "Unwrap and pack UV islands on active mesh"
+        bl_options = {"REGISTER", "UNDO"}
+
+        def execute(self, context):
+            res = diagnostics_uv.uv_unwrap_and_pack()
+            if not res.get("ok"):
+                self.report({"WARNING"}, res.get("error", "UV Unwrap & Pack failed."))
+                return {"CANCELLED"}
+            return {"FINISHED"}
 
     class LANDFALL_STUDIO_OT_delete_non_deformer_history(bpy.types.Operator):
         """Delete non-deformer modeling construction history while preserving Armatures, skin weights, and Shape Keys."""
@@ -293,6 +361,10 @@ if bpy is not None:
         LANDFALL_STUDIO_OT_target_weld,
         LANDFALL_STUDIO_OT_make_live,
         LANDFALL_STUDIO_OT_quad_draw_modal,
+        LANDFALL_STUDIO_OT_quad_draw,
+        LANDFALL_STUDIO_OT_center_pivot_guarded,
+        LANDFALL_STUDIO_OT_freeze_transformations_guarded,
+        LANDFALL_STUDIO_OT_uv_unwrap_pack,
         LANDFALL_STUDIO_OT_delete_non_deformer_history,
         LANDFALL_STUDIO_OT_scene_diagnostics,
         LANDFALL_STUDIO_OT_texel_density,

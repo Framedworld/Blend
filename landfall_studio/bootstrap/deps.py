@@ -48,14 +48,27 @@ def _spec_info(module_name: str) -> Dict[str, object]:
     }
 
 
+_deps_cache: Dict[tuple, Dict[str, object]] = {}
+
+
+def invalidate_dependency_cache() -> None:
+    """Clear the cached dependency report (e.g. after installing packages or changing paths)."""
+    _deps_cache.clear()
+
+
 def check_dependencies(
     custom_upstream_root: Optional[str] = None,
     custom_deps_dir: Optional[str] = None,
+    force_refresh: bool = False,
 ) -> Dict[str, object]:
     """Perform a non-destructive pre-flight check of Python packages and upstream repos.
 
-    Never triggers `pip install` or imports `tentacle.tcl_blender`.
+    Never triggers `pip install` or imports `tentacle.tcl_blender`. Cached per `(upstream_root, deps_dir)`.
     """
+    cache_key = (str(custom_upstream_root or ""), str(custom_deps_dir or ""))
+    if not force_refresh and cache_key in _deps_cache:
+        return dict(_deps_cache[cache_key])
+
     path_report = configure_sys_path(
         custom_upstream_root=custom_upstream_root,
         custom_deps_dir=custom_deps_dir,
@@ -100,7 +113,7 @@ def check_dependencies(
         and all(upstream_specs[k]["importable"] for k in ("landfall", "pythontk", "uitk", "blendertk", "tentacle"))
     )
 
-    return {
+    result = {
         "deps_dir": path_report["deps_dir"],
         "deps_dir_exists": path_report["deps_dir_exists"],
         "packages": packages,
@@ -109,6 +122,8 @@ def check_dependencies(
         "qt_ready": qt_ready,
         "full_stack_ready": full_stack_ready,
     }
+    _deps_cache[cache_key] = result
+    return dict(result)
 
 
 def is_qt_ready(
@@ -149,7 +164,7 @@ def install_dependencies(
     resolved_target = Path(target_dir).resolve() if target_dir else get_deps_dir()
     resolved_target.mkdir(parents=True, exist_ok=True)
 
-    status = check_dependencies(custom_deps_dir=str(resolved_target))
+    status = check_dependencies(custom_deps_dir=str(resolved_target), force_refresh=True)
     to_install = packages if packages is not None else list(status["missing_pip_specs"])
 
     if not to_install:
@@ -188,8 +203,9 @@ def install_dependencies(
     if str(resolved_target) not in sys.path:
         sys.path.insert(0, str(resolved_target))
     importlib.invalidate_caches()
+    invalidate_dependency_cache()
 
-    post_status = check_dependencies(custom_deps_dir=str(resolved_target))
+    post_status = check_dependencies(custom_deps_dir=str(resolved_target), force_refresh=True)
     return {
         "ok": proc.returncode == 0 and post_status["qt_ready"],
         "returncode": proc.returncode,

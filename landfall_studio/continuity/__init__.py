@@ -223,7 +223,7 @@ _soft_select_ring_state: Dict[str, Any] = {
 }
 
 
-def _iter_view3d_spaces(context=None) -> List[Any]:
+def _iter_view3d_spaces(context=None, active_only: bool = True) -> List[Any]:
     if bpy is None:
         return []
     ctx = context or bpy.context
@@ -231,6 +231,15 @@ def _iter_view3d_spaces(context=None) -> List[Any]:
     sd = getattr(ctx, "space_data", None)
     if sd is not None and getattr(sd, "type", "") == "VIEW_3D":
         spaces.append(sd)
+        if active_only:
+            return spaces
+    area = getattr(ctx, "area", None)
+    if area is not None and getattr(area, "type", "") == "VIEW_3D":
+        for sp in area.spaces:
+            if sp.type == "VIEW_3D" and sp not in spaces:
+                spaces.append(sp)
+                if active_only:
+                    return spaces
     wm = getattr(ctx, "window_manager", None)
     for win in (wm.windows if wm else ()):
         if win.screen is None:
@@ -240,6 +249,10 @@ def _iter_view3d_spaces(context=None) -> List[Any]:
                 for sp in area.spaces:
                     if sp.type == "VIEW_3D" and sp not in spaces:
                         spaces.append(sp)
+                        if active_only:
+                            return spaces
+    if active_only and spaces:
+        return spaces[:1]
     for ws in getattr(bpy.data, "workspaces", ()):
         for screen in ws.screens:
             for area in screen.areas:
@@ -247,6 +260,8 @@ def _iter_view3d_spaces(context=None) -> List[Any]:
                     for sp in area.spaces:
                         if sp.type == "VIEW_3D" and sp not in spaces:
                             spaces.append(sp)
+                            if active_only:
+                                return spaces
     return spaces
 
 
@@ -536,7 +551,7 @@ def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
     spec = MAYA_SHADING_MODES[norm]
 
     if norm in ("6", "7"):
-        _ensure_eevee_engine(scene)
+        # Apply EEVEE viewport hardware settings without overwriting scene.render.engine (e.g. preserving CYCLES for final renders)
         _apply_eevee_hardware_settings(scene, spaces)
 
     for sp in spaces:
@@ -806,9 +821,12 @@ def open_native_editor_or_mode(target: str, context=None) -> Dict[str, Any]:
         try:
             from ..ui import desktop
 
+            split_res = desktop.set_bottom_node_graph_split(True, graph_type=norm)
+            result["editor_split"] = split_res
+            result["editor_opened"] = bool(split_res.get("open", False))
             desktop.set_command_feedback("NativeEditorBridge", f"{spec['label']} ({spec['editor_ui_type']})")
         except Exception:
-            pass
+            result["editor_opened"] = False
         return result
 
     if norm == "SCULPT_MODE":
@@ -1037,9 +1055,7 @@ if bpy is not None:
                 mx = float(event.mouse_region_x)
                 my = float(event.mouse_region_y)
                 dx = mx - self._start_x
-                dy = my - self._start_y
-                dist = (dx * dx + dy * dy) ** 0.5
-                if self._lmb_down or dist > 10.0:
+                if self._lmb_down:
                     self._dragged = True
                     new_r = max(0.05, round(self._start_radius + dx * 0.02, 3))
                     set_soft_selection_state(
@@ -1142,7 +1158,7 @@ if bpy is not None:
 
         bl_idname = "landfall_studio.smart_delete"
         bl_label = "Maya Smart Delete (Del / BackSpace)"
-        bl_description = "Delete selected objects or active mesh components (Verts/Edges/Faces)"
+        bl_description = "Delete selected objects or active mesh components (Verts/Edges/Faces; dissolves interior edges like Maya Delete Edge)"
         bl_options = {"REGISTER", "UNDO"}
 
         def execute(self, context):
@@ -1151,7 +1167,21 @@ if bpy is not None:
                 if msm[2]:
                     bpy.ops.mesh.delete(type="FACE")
                 elif msm[1]:
-                    bpy.ops.mesh.delete(type="EDGE")
+                    import bmesh
+                    obj = context.edit_object
+                    bm = bmesh.from_edit_mesh(obj.data) if (obj and obj.data) else None
+                    before_edges = len(bm.edges) if bm is not None else -1
+                    dissolved = False
+                    try:
+                        res = bpy.ops.mesh.dissolve_edges(use_verts=True)
+                        if res == {"FINISHED"}:
+                            bm = bmesh.from_edit_mesh(obj.data) if (obj and obj.data) else None
+                            after_edges = len(bm.edges) if bm is not None else -1
+                            dissolved = after_edges < before_edges
+                    except Exception:
+                        dissolved = False
+                    if not dissolved:
+                        bpy.ops.mesh.delete(type="EDGE")
                 else:
                     bpy.ops.mesh.delete(type="VERT")
             else:

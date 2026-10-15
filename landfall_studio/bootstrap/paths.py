@@ -23,6 +23,7 @@ PINNED_SHAS: Dict[str, str] = {
 UPSTREAM_REPOS = ("pythontk", "uitk", "blendertk", "tentacle", "landfall")
 
 _added_sys_paths: list[str] = []
+_git_sha_cache: Dict[str, Optional[str]] = {}
 
 
 def _package_root() -> Path:
@@ -35,18 +36,39 @@ def _repo_root() -> Path:
     return _package_root().parent
 
 
+def _read_saved_addon_pref(attr_name: str) -> str:
+    """Read a saved path preference (`upstream_root` or `deps_dir`) from Blender's AddonPreferences if available."""
+    try:
+        import bpy
+
+        prefs = getattr(bpy.context, "preferences", None)
+        addons = getattr(prefs, "addons", None) if prefs is not None else None
+        if addons is not None:
+            for key in ("landfall_studio", __package__.split(".")[0] if __package__ else "landfall_studio"):
+                addon = addons.get(key)
+                if addon is not None and getattr(addon, "preferences", None) is not None:
+                    val = str(getattr(addon.preferences, attr_name, "") or "").strip()
+                    if val:
+                        return val
+    except Exception:
+        pass
+    return ""
+
+
 def get_upstream_root(custom_root: Optional[str] = None) -> Path:
     """Resolve the directory holding pinned upstream checkouts.
 
     Search order:
     1. Explicit `custom_root` argument (e.g. from AddonPreferences)
-    2. `LANDFALL_STUDIO_UPSTREAM_ROOT` environment variable
-    3. `<repo_root>/../upstream` (sibling `upstream/` directory)
-    4. `<repo_root>/upstream`
+    2. Saved `AddonPreferences.upstream_root` in Blender
+    3. `LANDFALL_STUDIO_UPSTREAM_ROOT` environment variable
+    4. `<repo_root>/../upstream` (sibling `upstream/` directory)
+    5. `<repo_root>/upstream`
     """
     candidates = []
-    if custom_root:
-        candidates.append(Path(custom_root))
+    effective_custom = (custom_root or "").strip() or _read_saved_addon_pref("upstream_root")
+    if effective_custom:
+        candidates.append(Path(effective_custom))
     env_root = os.environ.get("LANDFALL_STUDIO_UPSTREAM_ROOT", "").strip()
     if env_root:
         candidates.append(Path(env_root))
@@ -58,6 +80,8 @@ def get_upstream_root(custom_root: Optional[str] = None) -> Path:
     for candidate in candidates:
         if candidate.is_dir():
             return candidate.resolve()
+    if effective_custom:
+        return Path(effective_custom).resolve()
     return (repo.parent / "upstream").resolve()
 
 
@@ -66,13 +90,15 @@ def get_deps_dir(custom_deps_dir: Optional[str] = None) -> Path:
 
     Search order:
     1. Explicit `custom_deps_dir` argument
-    2. `LANDFALL_STUDIO_DEPS` environment variable
-    3. `TENTACLE_QT_DEPS` environment variable
-    4. `<repo_root>/../.deps/py313` (isolated local workspace dependency folder)
-    5. `bpy.utils.user_resource('SCRIPTS', path='addons/modules')` when inside Blender
+    2. Saved `AddonPreferences.deps_dir` in Blender
+    3. `LANDFALL_STUDIO_DEPS` environment variable
+    4. `TENTACLE_QT_DEPS` environment variable
+    5. `<repo_root>/../.deps/py313` (isolated local workspace dependency folder)
+    6. `bpy.utils.user_resource('SCRIPTS', path='addons/modules')` when inside Blender
     """
-    if custom_deps_dir and custom_deps_dir.strip():
-        return Path(custom_deps_dir.strip()).resolve()
+    effective_custom = (custom_deps_dir or "").strip() or _read_saved_addon_pref("deps_dir")
+    if effective_custom:
+        return Path(effective_custom).resolve()
 
     for env_key in ("LANDFALL_STUDIO_DEPS", "TENTACLE_QT_DEPS"):
         val = os.environ.get(env_key, "").strip()
@@ -132,9 +158,14 @@ def resolve_upstream_paths(custom_root: Optional[str] = None) -> Dict[str, Dict[
 
 
 def _read_git_sha(repo_dir: Path) -> Optional[str]:
-    """Read HEAD commit SHA from a git checkout without mutating state."""
+    """Read HEAD commit SHA from a git checkout without mutating state (cached per repo_dir)."""
+    cache_key = str(repo_dir)
+    if cache_key in _git_sha_cache:
+        return _git_sha_cache[cache_key]
+
     git_dir = repo_dir / ".git"
     if not git_dir.exists():
+        _git_sha_cache[cache_key] = None
         return None
     try:
         head_file = git_dir / "HEAD" if git_dir.is_dir() else None
@@ -143,7 +174,9 @@ def _read_git_sha(repo_dir: Path) -> Optional[str]:
             if content.startswith("ref: "):
                 ref_path = git_dir / content[5:].strip()
                 if ref_path.is_file():
-                    return ref_path.read_text(encoding="utf-8").strip()
+                    sha = ref_path.read_text(encoding="utf-8").strip()
+                    _git_sha_cache[cache_key] = sha
+                    return sha
                 packed_refs = git_dir / "packed-refs"
                 if packed_refs.is_file():
                     ref_name = content[5:].strip()
@@ -151,8 +184,10 @@ def _read_git_sha(repo_dir: Path) -> Optional[str]:
                         if line and not line.startswith("#") and not line.startswith("^"):
                             parts = line.split()
                             if len(parts) == 2 and parts[1] == ref_name:
+                                _git_sha_cache[cache_key] = parts[0]
                                 return parts[0]
             elif len(content) == 40:
+                _git_sha_cache[cache_key] = content
                 return content
     except Exception:
         pass
@@ -166,9 +201,12 @@ def _read_git_sha(repo_dir: Path) -> Optional[str]:
             check=False,
         )
         if proc.returncode == 0:
-            return proc.stdout.strip()
+            sha = proc.stdout.strip()
+            _git_sha_cache[cache_key] = sha
+            return sha
     except Exception:
         pass
+    _git_sha_cache[cache_key] = None
     return None
 
 

@@ -63,6 +63,61 @@ def _settle_keyconfigs(context) -> None:
         pass
 
 
+def _get_muted_kmi_state_path() -> str:
+    import os
+    try:
+        cfg_dir = bpy.utils.user_resource("CONFIG")
+    except Exception:
+        cfg_dir = ""
+    if not cfg_dir:
+        import tempfile
+        cfg_dir = tempfile.gettempdir()
+    os.makedirs(cfg_dir, exist_ok=True)
+    return os.path.join(cfg_dir, "landfall_studio_muted_kmi.json")
+
+
+def _save_muted_signatures_to_disk() -> None:
+    import json
+    import os
+    path = _get_muted_kmi_state_path()
+    try:
+        if not _muted_user_signatures:
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump([list(sig) for sig in _muted_user_signatures], f)
+    except Exception:
+        pass
+
+
+def _load_persisted_muted_signatures() -> List[Tuple[str, str, str, str, bool, bool, bool, bool]]:
+    import json
+    import os
+    path = _get_muted_kmi_state_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        out = []
+        for item in raw:
+            if isinstance(item, list) and len(item) == 8:
+                out.append((
+                    str(item[0]),
+                    str(item[1]),
+                    str(item[2]),
+                    str(item[3]),
+                    bool(item[4]),
+                    bool(item[5]),
+                    bool(item[6]),
+                    bool(item[7]),
+                ))
+        return out
+    except Exception:
+        return []
+
+
 def _mute_conflicting_user_items(
     context,
     km_name: str,
@@ -83,6 +138,9 @@ def _mute_conflicting_user_items(
     ukm = user_kc.keymaps.get(km_name)
     if ukm is None:
         return
+
+    prefs = getattr(context, "preferences", None)
+    was_dirty = bool(getattr(prefs, "is_dirty", False)) if prefs is not None else False
 
     for kmi in ukm.keymap_items:
         if (
@@ -116,13 +174,27 @@ def _mute_conflicting_user_items(
             except Exception:
                 pass
 
+    if prefs is not None and not was_dirty:
+        try:
+            prefs.is_dirty = False
+        except Exception:
+            pass
+
 
 def _restore_muted_user_items(context) -> None:
-    """Restore all native user keymap items muted by the `MAYA` profile."""
+    """Restore all native user keymap items muted by the `MAYA` profile (including any persisted from prior sessions)."""
     try:
         user_kc = context.window_manager.keyconfigs.user
     except Exception:
         user_kc = None
+
+    prefs = getattr(context, "preferences", None)
+    was_dirty = bool(getattr(prefs, "is_dirty", False)) if prefs is not None else False
+
+    all_sigs = list(_muted_user_signatures)
+    for persisted_sig in _load_persisted_muted_signatures():
+        if persisted_sig not in all_sigs:
+            all_sigs.append(persisted_sig)
 
     if user_kc is not None:
         for (
@@ -134,7 +206,7 @@ def _restore_muted_user_items(context) -> None:
             alt,
             shift,
             oskey,
-        ) in _muted_user_signatures:
+        ) in all_sigs:
             ukm = user_kc.keymaps.get(km_name)
             if ukm is None:
                 continue
@@ -153,6 +225,13 @@ def _restore_muted_user_items(context) -> None:
                     except Exception:
                         pass
     _muted_user_signatures.clear()
+    _save_muted_signatures_to_disk()
+
+    if prefs is not None and not was_dirty:
+        try:
+            prefs.is_dirty = False
+        except Exception:
+            pass
 
 
 def _wake_studio_user_items(context) -> None:
@@ -673,7 +752,15 @@ def apply_profile(context=None, profile: str = "MAYA") -> Dict[str, Any]:
         _mute_conflicting_user_items(
             context, km_name, key_type, ctrl=ctrl, alt=alt, shift=shift
         )
+    _save_muted_signatures_to_disk()
     _wake_studio_user_items(context)
+
+    prefs = getattr(context, "preferences", None)
+    if prefs is not None:
+        try:
+            prefs.is_dirty = False
+        except Exception:
+            pass
 
     return {
         "profile": _active_profile,

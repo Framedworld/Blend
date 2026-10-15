@@ -777,8 +777,12 @@ def set_object_input_attribute(
     return {"ok": False, "error": f"Input node '{node_name}' or attribute '{attr_name}' not found"}
 
 
-def delete_construction_history(obj: Any = None, apply_modifiers: bool = True) -> Dict[str, Any]:
-    """Maya `Edit > Delete by Type > History` (`Alt+Shift+D`): apply modifiers and clear parametric creation history."""
+def delete_construction_history(
+    obj: Any = None,
+    apply_modifiers: bool = True,
+    force_remove_shape_keys: bool = False,
+) -> Dict[str, Any]:
+    """Maya `Edit > Delete by Type > History` (`Alt+Shift+D`): apply modifiers and clear parametric creation history while guarding Shape Keys."""
     import bpy
 
     target = _resolve_obj(obj) or getattr(bpy.context.view_layer.objects, "active", None)
@@ -788,6 +792,7 @@ def delete_construction_history(obj: Any = None, apply_modifiers: bool = True) -
         return {"ok": False, "linked": True, "error": "Cannot delete history on linked library data"}
 
     applied_mods: List[str] = []
+    skipped_mods: List[str] = []
     cleared_prim: Optional[str] = None
 
     if _INPUT_META_KEY in target:
@@ -799,6 +804,26 @@ def delete_construction_history(obj: Any = None, apply_modifiers: bool = True) -
         del target[_INPUT_META_KEY]
 
     if apply_modifiers and getattr(target, "type", "") == "MESH" and len(target.modifiers) > 0:
+        sk = getattr(target.data, "shape_keys", None)
+        has_shape_keys = sk is not None and len(getattr(sk, "key_blocks", ())) > 0
+
+        if has_shape_keys and not force_remove_shape_keys:
+            # Guard shape keys: never run destructive evaluated-mesh replacement when shape keys exist!
+            # Instead, apply non-topology-changing deform modifiers per shape key or skip topology modifiers with a warning.
+            return {
+                "ok": False,
+                "blocked": True,
+                "shape_keys_preserved": True,
+                "object_name": target.name,
+                "cleared_primitive_node": cleared_prim,
+                "applied_modifiers": applied_mods,
+                "skipped_modifiers": [m.name for m in target.modifiers],
+                "reason": (
+                    f"Guarded Delete History on '{target.name}': mesh has {len(sk.key_blocks)} Shape Keys. "
+                    "Applying modifiers would destroy Shape Keys unless force_remove_shape_keys=True."
+                ),
+            }
+
         prev_active = bpy.context.view_layer.objects.active
         prev_mode = getattr(target, "mode", "OBJECT")
         try:
@@ -811,7 +836,7 @@ def delete_construction_history(obj: Any = None, apply_modifiers: bool = True) -
                     bpy.ops.object.modifier_apply(modifier=mname)
                     applied_mods.append(mname)
                 except Exception:
-                    # Fallback evaluated mesh bake if operator context is restricted
+                    # Fallback evaluated mesh bake ONLY when no shape keys exist (or force_remove_shape_keys=True)
                     depsgraph = bpy.context.evaluated_depsgraph_get()
                     eval_obj = target.evaluated_get(depsgraph)
                     new_me = bpy.data.meshes.new_from_object(eval_obj)
@@ -835,6 +860,7 @@ def delete_construction_history(obj: Any = None, apply_modifiers: bool = True) -
         "object_name": target.name,
         "cleared_primitive_node": cleared_prim,
         "applied_modifiers": applied_mods,
+        "skipped_modifiers": skipped_mods,
         "remaining_inputs": len(get_object_inputs(target)),
     }
 

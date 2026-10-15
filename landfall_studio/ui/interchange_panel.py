@@ -91,14 +91,26 @@ def create_interchange_widget() -> Any:
             path_row = QtWidgets.QHBoxLayout()
             path_row.setSpacing(4)
             self.txt_ma_path = QtWidgets.QLineEdit()
-            self.txt_ma_path.setPlaceholderText("Path to .ma / .mb scene file...")
+            self.txt_ma_path.setPlaceholderText("Import source .ma / .mb scene file...")
             btn_browse = QtWidgets.QPushButton("…")
             btn_browse.setFixedWidth(26)
-            btn_browse.setToolTip("Browse for .ma or .mb file")
+            btn_browse.setToolTip("Browse for source .ma or .mb file to import")
             btn_browse.clicked.connect(self._on_browse_ma)
             path_row.addWidget(self.txt_ma_path, 1)
             path_row.addWidget(btn_browse)
             blay.addLayout(path_row)
+
+            save_row = QtWidgets.QHBoxLayout()
+            save_row.setSpacing(4)
+            self.txt_save_ma_path = QtWidgets.QLineEdit()
+            self.txt_save_ma_path.setPlaceholderText("Export / Save As .ma destination path...")
+            btn_browse_save = QtWidgets.QPushButton("…")
+            btn_browse_save.setFixedWidth(26)
+            btn_browse_save.setToolTip("Browse for destination .ma or .mb file to save")
+            btn_browse_save.clicked.connect(self._on_browse_save_ma)
+            save_row.addWidget(self.txt_save_ma_path, 1)
+            save_row.addWidget(btn_browse_save)
+            blay.addLayout(save_row)
 
             opts_row = QtWidgets.QHBoxLayout()
             opts_row.setSpacing(4)
@@ -203,6 +215,15 @@ def create_interchange_widget() -> Any:
             scroll.setWidget(body)
             vlay.addWidget(scroll, 1)
 
+        def _default_export_path_from_import(self, import_path: str) -> str:
+            import os
+            if not import_path:
+                return ""
+            base, ext = os.path.splitext(import_path)
+            if ext.lower() not in (".ma", ".mb"):
+                ext = ".ma"
+            return f"{base}_export{ext}"
+
         def _on_browse_ma(self) -> None:
             path, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self,
@@ -212,6 +233,18 @@ def create_interchange_widget() -> Any:
             )
             if path:
                 self.txt_ma_path.setText(path)
+                if not self.txt_save_ma_path.text().strip():
+                    self.txt_save_ma_path.setText(self._default_export_path_from_import(path))
+
+        def _on_browse_save_ma(self) -> None:
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self,
+                "Save As Maya Scene (.ma / .mb)",
+                self.txt_save_ma_path.text().strip() or self._default_export_path_from_import(self.txt_ma_path.text().strip()),
+                "Maya Scenes (*.ma *.mb)",
+            )
+            if path:
+                self.txt_save_ma_path.setText(path)
 
         def _on_preflight_clicked(self) -> None:
             p = self.txt_ma_path.text().strip()
@@ -224,6 +257,8 @@ def create_interchange_widget() -> Any:
             p = self.txt_ma_path.text().strip()
             if not p:
                 return
+            if not self.txt_save_ma_path.text().strip():
+                self.txt_save_ma_path.setText(self._default_export_path_from_import(p))
             rep = interchange.import_maya_scene(
                 p,
                 via=self.cmb_carrier.currentText(),
@@ -233,12 +268,19 @@ def create_interchange_widget() -> Any:
             self._render_report_text(rep)
 
         def _on_save_clicked(self) -> None:
-            p = self.txt_ma_path.text().strip()
-            if not p:
-                return
+            src_p = self.txt_ma_path.text().strip()
+            dst_p = self.txt_save_ma_path.text().strip()
+            if not dst_p:
+                if src_p:
+                    dst_p = self._default_export_path_from_import(src_p)
+                    self.txt_save_ma_path.setText(dst_p)
+                else:
+                    return
             rep = interchange.save_as_maya_scene(
-                p,
+                dst_p,
                 carrier=self.cmb_carrier.currentText(),
+                protected_source_path=src_p or None,
+                allow_overwrite_source=False,
             )
             self.refresh_from_scene()
             self._render_report_text(rep)
@@ -246,7 +288,7 @@ def create_interchange_widget() -> Any:
         def _on_send_clicked(self) -> None:
             rep = interchange.send_to_maya(
                 carrier=self.cmb_carrier.currentText(),
-                dry_run=True,
+                dry_run=False,
             )
             self._render_report_text(rep)
 

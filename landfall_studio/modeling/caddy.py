@@ -69,11 +69,30 @@ _active_caddy: Dict[str, Any] = {
 }
 
 
+def _cleanup_snapshot_backup_mesh(snap: Optional[Dict[str, Any]]) -> None:
+    if not isinstance(snap, dict):
+        return
+    b_name = snap.get("backup_mesh_name")
+    if b_name:
+        try:
+            import bpy
+            me = bpy.data.meshes.get(b_name)
+            if me is not None and me.users == 0:
+                bpy.data.meshes.remove(me)
+        except Exception:
+            pass
+    snap["backup_mesh_name"] = ""
+
+
 def _snapshot_mesh_state(obj: Any) -> Dict[str, Any]:
-    """Capture a complete BMesh + selection + material + UV snapshot of `obj` before caddy execution."""
+    """Capture a complete lossless Mesh + BMesh + selection + customdata (skin weights, shape keys, all UVs) snapshot."""
+    import bpy
     import bmesh
 
     is_edit = obj.mode == "EDIT"
+    if is_edit:
+        obj.update_from_editmode()
+
     bm = bmesh.from_edit_mesh(obj.data) if is_edit else bmesh.new()
     if not is_edit:
         bm.from_mesh(obj.data)
@@ -82,14 +101,13 @@ def _snapshot_mesh_state(obj: Any) -> Dict[str, Any]:
     bm.edges.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
 
-    uv_layer = bm.loops.layers.uv.active
-    verts_data = [(tuple(v.co), bool(v.select)) for v in bm.verts]
-    edges_data = [((e.verts[0].index, e.verts[1].index), bool(e.select), bool(e.seam), bool(e.smooth)) for e in bm.edges]
-    faces_data = []
-    for f in bm.faces:
-        v_indices = tuple(v.index for v in f.verts)
-        uvs = tuple((float(loop[uv_layer].uv.x), float(loop[uv_layer].uv.y)) for loop in f.loops) if uv_layer is not None else ()
-        faces_data.append((v_indices, bool(f.select), int(f.material_index), bool(f.smooth), uvs))
+    # Create a full Mesh datablock copy so all customdata layers (dvert skin weights, shape keys, all UV sets, attributes) are preserved
+    backup_mesh = obj.data.copy()
+    backup_mesh.name = f"__landfall_caddy_snap_{obj.name}"
+
+    vert_sel = [bool(v.select) for v in bm.verts]
+    edge_sel = [bool(e.select) for e in bm.edges]
+    face_sel = [bool(f.select) for f in bm.faces]
 
     # Compute world centroid of selected components for caddy anchor
     sel_coords = [obj.matrix_world @ v.co for v in bm.verts if v.select]
@@ -108,55 +126,38 @@ def _snapshot_mesh_state(obj: Any) -> Dict[str, Any]:
         bm.free()
 
     return {
-        "verts": verts_data,
-        "edges": edges_data,
-        "faces": faces_data,
-        "has_uv": uv_layer is not None,
+        "backup_mesh_name": backup_mesh.name,
+        "vert_sel": vert_sel,
+        "edge_sel": edge_sel,
+        "face_sel": face_sel,
         "anchor_world": anchor,
     }
 
 
 def _restore_mesh_snapshot(obj: Any, snap: Dict[str, Any]) -> None:
-    """Restore `obj`'s BMesh geometry, component selections, materials, and UVs from `snap`."""
+    """Restore `obj`'s full BMesh geometry, customdata (skin weights, shape keys, all UV layers), and selections from `snap`."""
+    import bpy
     import bmesh
+
+    backup_mesh = bpy.data.meshes.get(snap.get("backup_mesh_name", ""))
+    if backup_mesh is None:
+        return
 
     is_edit = obj.mode == "EDIT"
     bm = bmesh.from_edit_mesh(obj.data) if is_edit else bmesh.new()
     bm.clear()
+    bm.from_mesh(backup_mesh)
 
-    uv_layer = bm.loops.layers.uv.verify() if snap.get("has_uv") else None
-
-    created_verts = []
-    for co, sel in snap["verts"]:
-        v = bm.verts.new(co)
-        v.select = sel
-        created_verts.append(v)
     bm.verts.ensure_lookup_table()
-
-    for (i0, i1), sel, seam, smooth in snap["edges"]:
-        try:
-            e = bm.edges.new((created_verts[i0], created_verts[i1]))
-        except ValueError:
-            e = bm.edges.get((created_verts[i0], created_verts[i1]))
-        if e is not None:
-            e.select = sel
-            e.seam = seam
-            e.smooth = smooth
     bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
 
-    for v_indices, sel, mat_idx, smooth, uvs in snap["faces"]:
-        f_verts = [created_verts[i] for i in v_indices]
-        try:
-            f = bm.faces.new(f_verts)
-        except ValueError:
-            f = bm.faces.get(f_verts)
-        if f is not None:
-            f.select = sel
-            f.material_index = mat_idx
-            f.smooth = smooth
-            if uv_layer is not None and uvs and len(uvs) == len(f.loops):
-                for loop, (u, v_coord) in zip(f.loops, uvs):
-                    loop[uv_layer].uv = (u, v_coord)
+    for v, sel in zip(bm.verts, snap.get("vert_sel", ())):
+        v.select = sel
+    for e, sel in zip(bm.edges, snap.get("edge_sel", ())):
+        e.select = sel
+    for f, sel in zip(bm.faces, snap.get("face_sel", ())):
+        f.select = sel
 
     bm.normal_update()
     if is_edit:
@@ -395,6 +396,7 @@ def invoke_modeling_caddy(
         k = p_spec["key"]
         params[k] = merged_overrides.get(k, p_spec["default"])
 
+    _cleanup_snapshot_backup_mesh(_active_caddy.get("snapshot"))
     snap = _snapshot_mesh_state(obj)
     res = _execute_bm_operation(obj, t_upper, params)
 
@@ -517,6 +519,7 @@ def commit_or_close_caddy() -> Dict[str, Any]:
     global _active_caddy
     was_open = bool(_active_caddy.get("open"))
     tool = _active_caddy.get("tool", "")
+    _cleanup_snapshot_backup_mesh(_active_caddy.get("snapshot"))
     _active_caddy["open"] = False
     _active_caddy["snapshot"] = None
     return {"ok": True, "was_open": was_open, "tool": tool}

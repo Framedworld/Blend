@@ -298,6 +298,77 @@ def project_point_to_live_surface(
     }
 
 
+def raycast_live_surface(
+    ray_origin: Tuple[float, float, float],
+    ray_direction: Tuple[float, float, float],
+    max_distance: float = 1e6,
+    surface_offset: float = 0.0,
+) -> Dict[str, Any]:
+    """Cast a ray `(ray_origin, ray_direction)` directly against the designated `Make Live` BVHTree."""
+    from mathutils import Vector
+
+    origin = Vector((float(ray_origin[0]), float(ray_origin[1]), float(ray_origin[2])))
+    direction = Vector((float(ray_direction[0]), float(ray_direction[1]), float(ray_direction[2]))).normalized()
+
+    live_obj = get_live_surface_object()
+    if live_obj is not None:
+        bvh = _get_or_build_live_bvh(live_obj)
+        if bvh is not None:
+            loc, nrm, face_idx, dist = bvh.ray_cast(origin, direction, float(max_distance))
+            if loc is not None:
+                normal_vec = nrm.normalized() if nrm and nrm.length > 1e-8 else Vector((0.0, 0.0, 1.0))
+                final_loc = loc + normal_vec * float(surface_offset)
+                return {
+                    "ok": True,
+                    "hit": True,
+                    "location": (float(final_loc.x), float(final_loc.y), float(final_loc.z)),
+                    "normal": (float(normal_vec.x), float(normal_vec.y), float(normal_vec.z)),
+                    "face_index": int(face_idx) if face_idx is not None else -1,
+                    "distance": float(dist) if dist is not None else 0.0,
+                    "live_object": live_obj.name,
+                }
+            # Fallback if ray narrowly misses silhouette: project closest point to ray
+            fallback_pt = origin + direction * 4.0
+            return project_point_to_live_surface(
+                (fallback_pt.x, fallback_pt.y, fallback_pt.z),
+                max_distance=max_distance,
+                surface_offset=surface_offset,
+            )
+
+    # No Make Live surface: try scene ray_cast against visible meshes
+    try:
+        import bpy
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        hit, loc, nrm, face_idx, hit_obj, _mat = bpy.context.scene.ray_cast(
+            depsgraph, origin, direction, distance=float(max_distance)
+        )
+        if hit and loc is not None:
+            normal_vec = nrm.normalized() if nrm and nrm.length > 1e-8 else Vector((0.0, 0.0, 1.0))
+            final_loc = loc + normal_vec * float(surface_offset)
+            return {
+                "ok": True,
+                "hit": True,
+                "location": (float(final_loc.x), float(final_loc.y), float(final_loc.z)),
+                "normal": (float(normal_vec.x), float(normal_vec.y), float(normal_vec.z)),
+                "face_index": int(face_idx) if face_idx is not None else -1,
+                "distance": float((loc - origin).length),
+                "live_object": hit_obj.name if hit_obj is not None else "",
+            }
+    except Exception:
+        pass
+
+    fallback_pt = origin + direction * 4.0
+    return {
+        "ok": False,
+        "hit": False,
+        "location": (float(fallback_pt.x), float(fallback_pt.y), float(fallback_pt.z)),
+        "normal": (0.0, 0.0, 1.0),
+        "face_index": -1,
+        "distance": 4.0,
+        "live_object": "",
+    }
+
+
 def project_mesh_to_live_surface(
     target_obj_or_name: Any = None,
     selected_only: bool = False,

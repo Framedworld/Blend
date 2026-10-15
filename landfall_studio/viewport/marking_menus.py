@@ -71,12 +71,12 @@ RADIAL_RING_DEFS: Dict[str, Tuple[Tuple[str, Optional[str], Optional[Dict[str, A
         ("Quad Draw", "landfall_studio.quad_draw", {}, None),
     ),
     "TOOL_EDIT": (
-        ("Extrude", "landfall_studio.modeling_caddy", {"tool_id": "EXTRUDE"}, None),
-        ("Bevel", "landfall_studio.modeling_caddy", {"tool_id": "BEVEL"}, None),
-        ("Bridge", "landfall_studio.modeling_caddy", {"tool_id": "BRIDGE"}, None),
-        ("Connect", "landfall_studio.modeling_caddy", {"tool_id": "CONNECT"}, None),
+        ("Extrude", "landfall_studio.modeling_caddy", {"tool_type": "EXTRUDE"}, None),
+        ("Bevel", "landfall_studio.modeling_caddy", {"tool_type": "BEVEL"}, None),
+        ("Bridge", "landfall_studio.modeling_caddy", {"tool_type": "BRIDGE"}, None),
+        ("Connect", "landfall_studio.modeling_caddy", {"tool_type": "CONNECT"}, None),
         ("Target Weld", "landfall_studio.target_weld", {}, None),
-        ("Quad Draw", "landfall_studio.quad_draw", {}, None),
+        ("Quad Draw", "landfall_studio.quad_draw_modal", {}, None),
         ("Loop Cut", "mesh.loopcut_slide", {}, None),
         ("Merge Dist", "landfall.merge_by_distance", {}, None),
     ),
@@ -445,6 +445,12 @@ def _studio_mm_draw() -> None:
     context = bpy.context
     region = getattr(context, "region", None)
     if region is None or getattr(region, "type", "") != "WINDOW":
+        return
+    target_area = _studio_mm.get("area")
+    target_region = _studio_mm.get("region")
+    if target_area is not None and getattr(context, "area", None) is not None and context.area != target_area:
+        return
+    if target_region is not None and region != target_region:
         return
     if _studio_mm.get("layout") is None:
         _build_mm_layout(context)

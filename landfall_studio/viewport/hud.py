@@ -87,14 +87,33 @@ def compute_poly_count_stats(context: Any = None) -> Dict[str, Any]:
             if mode == "EDIT_MESH" and obj is active_obj and me.is_editmode:
                 try:
                     bm = bmesh.from_edit_mesh(me)
-                    sv = sum(1 for v in bm.verts if v.select)
-                    se = sum(1 for e in bm.edges if e.select)
-                    sf = [f for f in bm.faces if f.select]
-                    v_sel += sv
-                    e_sel += se
-                    f_sel += len(sf)
-                    t_sel += sum(max(1, len(f.verts) - 2) for f in sf)
-                    u_sel += sum(len(f.loops) for f in sf) if me.uv_layers.active else 0
+                    nb_v = len(bm.verts)
+                    nb_e = len(bm.edges)
+                    nb_f = len(bm.faces)
+                    # Adjust totals if edit-mesh topology differs from base Mesh struct
+                    v_tot += nb_v - nv
+                    e_tot += nb_e - ne
+                    f_tot += nb_f - nf
+                    # For dense meshes (> 2000 faces), use O(1) C-level Mesh selection counters to avoid per-redraw Python loop lag
+                    if nb_f > 2000 and hasattr(me, "total_vert_sel"):
+                        sv = int(getattr(me, "total_vert_sel", 0))
+                        se = int(getattr(me, "total_edge_sel", 0))
+                        sf_cnt = int(getattr(me, "total_face_sel", 0))
+                        v_sel += sv
+                        e_sel += se
+                        f_sel += sf_cnt
+                        avg_tris = (nt / nf) if nf > 0 else 2.0
+                        t_sel += int(round(sf_cnt * avg_tris))
+                        u_sel += sf_cnt * 4 if me.uv_layers.active else 0
+                    else:
+                        sv = sum(1 for v in bm.verts if v.select)
+                        se = sum(1 for e in bm.edges if e.select)
+                        sf = [f for f in bm.faces if f.select]
+                        v_sel += sv
+                        e_sel += se
+                        f_sel += len(sf)
+                        t_sel += sum(max(1, len(f.verts) - 2) for f in sf)
+                        u_sel += sum(len(f.loops) for f in sf) if me.uv_layers.active else 0
                 except Exception:
                     v_sel += nv
                     e_sel += ne

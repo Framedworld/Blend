@@ -81,8 +81,15 @@ def _ensure_qt_events_flushed() -> None:
         pass
 
 
+_cached_ui_handler: Optional[Any] = None
+
+
 def ensure_ui_handler() -> Optional[Any]:
     """Return the single authoritative `BlenderUiHandler` sharing `TclBlender`'s `Switchboard`."""
+    global _cached_ui_handler
+    if _cached_ui_handler is not None:
+        return _cached_ui_handler
+
     deps = check_dependencies()
     if not deps["full_stack_ready"]:
         return None
@@ -96,8 +103,10 @@ def ensure_ui_handler() -> Optional[Any]:
         tcl_blender._QtHost.ensure_widget(app)
         tcl = tentacle_bridge.get_tcl_instance()
         if tcl is not None and getattr(tcl, "sb", None) is not None:
-            return BlenderUiHandler.instance(switchboard=tcl.sb)
-        return BlenderUiHandler.instance()
+            _cached_ui_handler = BlenderUiHandler.instance(switchboard=tcl.sb)
+        else:
+            _cached_ui_handler = BlenderUiHandler.instance()
+        return _cached_ui_handler
     except Exception:
         return None
 
@@ -671,7 +680,17 @@ def set_bottom_node_graph_split(
     from blendertk.ui_utils._ui_utils import _UiUtilsInternal
 
     gtype = (graph_type or "SHADER").upper()
-    ui_type = "ShaderNodeTree" if gtype == "SHADER" else "GeometryNodeTree"
+    ui_type_map = {
+        "SHADER": "ShaderNodeTree",
+        "SHADER_EDITOR": "ShaderNodeTree",
+        "GEOMETRY": "GeometryNodeTree",
+        "GEOMETRY_NODES": "GeometryNodeTree",
+        "GRAPH_EDITOR": "FCURVES",
+        "DOPE_SHEET": "DOPESHEET",
+        "ASSET_BROWSER": "ASSETS",
+        "UV_EDITOR": "UV",
+    }
+    ui_type = ui_type_map.get(gtype, "GeometryNodeTree")
 
     rdock = _get_right_dock()
     if rdock._host_container is not None and hasattr(rdock._host_container, "btn_split_graph"):
@@ -960,8 +979,8 @@ def _compute_selection_value_sig() -> Tuple[Any, ...]:
         objs = list(CoreUtils.selected_objects())
         active = CoreUtils.active_object()
         active_name = active.name if active is not None else ""
-        parts: List[Any] = [active_name, cur_frame]
-        for o in objs[:8]:
+        parts: List[Any] = [active_name, len(objs)]
+        for o in objs:
             try:
                 loc = tuple(round(float(v), 5) for v in o.location)
                 rot = tuple(round(float(v), 5) for v in o.rotation_euler)
@@ -997,9 +1016,36 @@ def _compute_selection_value_sig() -> Tuple[Any, ...]:
         return ()
 
 
+def _is_animation_playing() -> bool:
+    try:
+        import bpy
+        scr = getattr(bpy.context, "screen", None)
+        if scr is not None and getattr(scr, "is_animation_playing", False):
+            return True
+        wm = getattr(bpy.context, "window_manager", None)
+        for win in (wm.windows if wm else ()):
+            if win.screen is not None and getattr(win.screen, "is_animation_playing", False):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _on_time_changed(*_args) -> None:
+    """Lightweight handler for `timeChanged`: updates Time Slider and Channel Box values without rebuilding Outliner/Hypershade/Interchange."""
+    time_slider.refresh_time_slider_widgets()
+    sync_channels_now()
+    if not _is_animation_playing():
+        shape_editor.refresh_shape_editor_widgets()
+        attribute_editor.refresh_attribute_editor()
+
+
 def _on_live_scene_or_depsgraph_update(*_args) -> None:
-    """Refresh `Channels`, `SHAPES/INPUTS`, `Display Layers`, `Modeling Toolkit`, `Shape Editor`, `Maya Interchange`, `Time Slider`, `Attribute Editor`, `Tool Settings`, and `Outliner`."""
+    """Refresh Qt panels when selection or object values change (skipping heavy panel rebuilds during active playback)."""
     global _last_selection_value_sig
+    if _is_animation_playing():
+        sync_channels_now()
+        return
     sig = _compute_selection_value_sig()
     if sig == _last_selection_value_sig:
         return
@@ -1037,7 +1083,6 @@ def ensure_selection_and_value_sync() -> bool:
         for ev in (
             "SelectionChanged",
             "DepsgraphUpdated",
-            "timeChanged",
         ):
             mgr.subscribe(
                 ev,
@@ -1045,6 +1090,12 @@ def ensure_selection_and_value_sync() -> bool:
                 owner=_DESKTOP_SYNC_OWNER,
                 ephemeral=False,
             )
+        mgr.subscribe(
+            "timeChanged",
+            _on_time_changed,
+            owner=_DESKTOP_SYNC_OWNER,
+            ephemeral=False,
+        )
         for ev in ("Undo", "Redo", "SceneOpened"):
             mgr.subscribe(
                 ev,

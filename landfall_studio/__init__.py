@@ -315,6 +315,33 @@ def _draw_studio_preferences(prefs_self, context):
         qt_row.operator("landfall_studio.toggle_script_output", text="Script Output")
 
 
+def _rollback_partial_registration(registered_classes: list) -> None:
+    """Cleanly roll back any partially registered classes, handlers, or bridges if `register()` fails midway."""
+    for fn in (
+        lambda: keymaps.remove_studio_keymaps(bpy.context),
+        ui.unregister,
+        viewport.unregister_hud_handler,
+        viewport.unregister_marking_menu_handlers,
+        character.unregister_handlers,
+        modeling.clear_modeling_state,
+        commands.clear_state,
+        tentacle_bridge.unregister,
+        landfall_bridge.unregister,
+        continuity.unregister_continuity_operators,
+        advanced.unregister_advanced_operators,
+        interchange.unregister_interchange_operators,
+    ):
+        try:
+            fn()
+        except Exception:
+            pass
+    for cls in reversed(registered_classes):
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass
+
+
 def register():
     """Register Landfall Studio: upstream paths, Landfall viewport/tools, studio operators, Tentacle Qt host, UI desktop, and Maya profile."""
     global _studio_registered
@@ -322,62 +349,92 @@ def register():
         return
 
     pkg_name = __package__ or "landfall_studio"
+    registered_classes: list = []
 
-    # 1. Pre-flight check of paths and dependencies (never triggers pip install)
-    dep_status = deps.check_dependencies()
-
-    # 2. Register Studio operators (bootstrap, viewport interaction, marking menus, keymap profile, Qt UI desktop, character, interchange, advanced, continuity)
-    for cls in STUDIO_CLASSES:
-        bpy.utils.register_class(cls)
-    interchange.register_interchange_operators()
-    advanced.register_advanced_operators()
-    continuity.register_continuity_operators()
-    viewport.register_marking_menu_handlers()
-    viewport.register_hud_handler()
-    character.register_handlers()
-
-    # 3. Register pinned upstream Landfall (theme, finite grid, smooth cage, border edges, gizmos, navigation)
-    landfall_bridge.register(
-        addon_package=pkg_name,
-        prefs_draw_hook=_draw_studio_preferences,
-    )
-
-    # 4. Initialize Tentacle Qt host & Switchboard only if all Qt/Python dependencies are present
-    lf_mod = landfall_bridge.get_module()
-    p = lf_mod.prefs(bpy.context) if lf_mod is not None else None
-    enable_tentacle = getattr(p, "enable_tentacle", True) if p is not None else True
-    profile = getattr(p, "interaction_profile", "MAYA") if p is not None else "MAYA"
-    key_show = (
-        "Key_Space"
-        if profile == "MAYA"
-        else ((getattr(p, "tentacle_key", "Z") if p is not None else "Z") or "Z")
-    )
-    auto_console = (
-        bool(getattr(p, "auto_restore_script_console", False)) if p is not None else False
-    )
-
-    if enable_tentacle and dep_status["full_stack_ready"]:
-        tentacle_bridge.register(
-            key_show=key_show,
-            auto_restore_script_console=auto_console,
-        )
-        workspace_bridge.sync_from_landfall()
-    else:
-        # Record degraded state without auto-installing anything
-        tentacle_bridge.register(
-            key_show=key_show,
-            auto_restore_script_console=auto_console,
+    try:
+        # 1. Pre-flight check of paths and dependencies (honoring saved AddonPreferences paths if already available)
+        saved_up = paths._read_saved_addon_pref("upstream_root") or None
+        saved_deps = paths._read_saved_addon_pref("deps_dir") or None
+        dep_status = deps.check_dependencies(
+            custom_upstream_root=saved_up,
+            custom_deps_dir=saved_deps,
         )
 
-    # 5. Register unified Qt window desktop & workspace integration
-    ui.register()
+        # 2. Register Studio operators (bootstrap, viewport interaction, marking menus, keymap profile, Qt UI desktop, character, interchange, advanced, continuity)
+        for cls in STUDIO_CLASSES:
+            try:
+                bpy.utils.register_class(cls)
+            except ValueError:
+                bpy.utils.unregister_class(cls)
+                bpy.utils.register_class(cls)
+            registered_classes.append(cls)
+        interchange.register_interchange_operators()
+        advanced.register_advanced_operators()
+        continuity.register_continuity_operators()
+        viewport.register_marking_menu_handlers()
+        viewport.register_hud_handler()
+        character.register_handlers()
 
-    # 6. Apply interaction profile (MAYA by default) and initialize persistent Move gizmo
-    keymaps.apply_profile(bpy.context, profile=profile)
-    commands.set_active_tool("TRANSLATE", axis="X")
-    viewport.apply_gizmo_for_tool(bpy.context, "TRANSLATE")
+        # 3. Register pinned upstream Landfall (theme, finite grid, smooth cage, border edges, gizmos, navigation)
+        landfall_bridge.register(
+            addon_package=pkg_name,
+            custom_upstream_root=saved_up,
+            prefs_draw_hook=_draw_studio_preferences,
+        )
 
-    _studio_registered = True
+        # 4. Re-read AddonPreferences after Landfall_Prefs registration so saved `upstream_root` & `deps_dir` are honored on startup
+        lf_mod = landfall_bridge.get_module()
+        p = lf_mod.prefs(bpy.context) if lf_mod is not None else None
+        custom_upstream = (getattr(p, "upstream_root", "") if p is not None else "") or saved_up
+        custom_deps = (getattr(p, "deps_dir", "") if p is not None else "") or saved_deps
+        if custom_upstream != saved_up or custom_deps != saved_deps:
+            dep_status = deps.check_dependencies(
+                custom_upstream_root=custom_upstream,
+                custom_deps_dir=custom_deps,
+                force_refresh=True,
+            )
+
+        enable_tentacle = getattr(p, "enable_tentacle", True) if p is not None else True
+        profile = getattr(p, "interaction_profile", "MAYA") if p is not None else "MAYA"
+        key_show = (
+            "Key_Space"
+            if profile == "MAYA"
+            else ((getattr(p, "tentacle_key", "Z") if p is not None else "Z") or "Z")
+        )
+        auto_console = (
+            bool(getattr(p, "auto_restore_script_console", False)) if p is not None else False
+        )
+
+        if enable_tentacle and dep_status["full_stack_ready"]:
+            tentacle_bridge.register(
+                key_show=key_show,
+                auto_restore_script_console=auto_console,
+                custom_upstream_root=custom_upstream,
+                custom_deps_dir=custom_deps,
+            )
+            workspace_bridge.sync_from_landfall()
+        else:
+            # Record degraded state without auto-installing anything
+            tentacle_bridge.register(
+                key_show=key_show,
+                auto_restore_script_console=auto_console,
+                custom_upstream_root=custom_upstream,
+                custom_deps_dir=custom_deps,
+            )
+
+        # 5. Register unified Qt window desktop & workspace integration
+        ui.register()
+
+        # 6. Apply interaction profile (MAYA by default) and initialize persistent Move gizmo
+        keymaps.apply_profile(bpy.context, profile=profile)
+        commands.set_active_tool("TRANSLATE", axis="X")
+        viewport.apply_gizmo_for_tool(bpy.context, "TRANSLATE")
+
+        _studio_registered = True
+    except Exception:
+        _rollback_partial_registration(registered_classes)
+        _studio_registered = False
+        raise
 
 
 def unregister():

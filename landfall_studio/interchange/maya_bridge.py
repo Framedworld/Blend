@@ -24,10 +24,11 @@ from typing import Any, Dict, List, Optional, Sequence
 from . import preflight_report
 
 _MAYAPY_BOOTSTRAP_DIR: Optional[str] = None
+_last_imported_source_path: Optional[str] = None
 
 
 def ensure_mayapy_sitecustomize_env(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-    """Ensure `PYTHONPATH` starts with a bootstrap `sitecustomize.py` that preloads `mayaLib0.dll` with `DONT_RESOLVE_DLL_REFERENCES` on Windows."""
+    """Ensure headless `mayapy` has Maya's `bin` directory registered on the DLL search path while chaining any studio `sitecustomize.py`."""
     global _MAYAPY_BOOTSTRAP_DIR
     import tempfile
 
@@ -40,19 +41,38 @@ def ensure_mayapy_sitecustomize_env(env: Optional[Dict[str, str]] = None) -> Dic
         os.makedirs(_MAYAPY_BOOTSTRAP_DIR, exist_ok=True)
         sc_path = os.path.join(_MAYAPY_BOOTSTRAP_DIR, "sitecustomize.py")
         sc_code = (
-            "import ctypes, os, sys\n"
+            "import ctypes, os, runpy, sys\n"
+            "_this_dir = os.path.normcase(os.path.abspath(os.path.dirname(__file__)))\n"
             "try:\n"
             "    bin_dir = os.path.dirname(sys.executable)\n"
-            "    lib0 = os.path.join(bin_dir, 'mayaLib0.dll')\n"
-            "    if os.path.isfile(lib0):\n"
+            "    if os.path.isdir(bin_dir):\n"
             "        if hasattr(os, 'add_dll_directory'):\n"
             "            os.add_dll_directory(bin_dir)\n"
+            "        os.environ['PATH'] = bin_dir + os.pathsep + os.environ.get('PATH', '')\n"
+            "    lib0 = os.path.join(bin_dir, 'mayaLib0.dll')\n"
+            "    if os.path.isfile(lib0):\n"
             "        k32 = ctypes.WinDLL('kernel32', use_last_error=True)\n"
             "        k32.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint]\n"
             "        k32.LoadLibraryExW.restype = ctypes.c_void_p\n"
-            "        k32.LoadLibraryExW(lib0, None, 0x0001)\n"
+            "        # Use LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS (0x00001100), fallback to 0\n"
+            "        h = k32.LoadLibraryExW(lib0, None, 0x00001100)\n"
+            "        if not h:\n"
+            "            k32.LoadLibraryExW(lib0, None, 0x0001)\n"
             "except Exception:\n"
             "    pass\n"
+            "# Chain-load any downstream studio sitecustomize.py on sys.path so studio setups are never shadowed\n"
+            "for _p in list(sys.path):\n"
+            "    if not _p:\n"
+            "        continue\n"
+            "    try:\n"
+            "        if os.path.normcase(os.path.abspath(_p)) == _this_dir:\n"
+            "            continue\n"
+            "        _cand = os.path.join(_p, 'sitecustomize.py')\n"
+            "        if os.path.isfile(_cand):\n"
+            "            runpy.run_path(_cand, init_globals=globals())\n"
+            "            break\n"
+            "    except Exception:\n"
+            "        pass\n"
         )
         with open(sc_path, "w", encoding="utf-8") as f:
             f.write(sc_code)
@@ -64,27 +84,20 @@ def ensure_mayapy_sitecustomize_env(env: Optional[Dict[str, str]] = None) -> Dic
 
 
 def _install_mayapy_env_hooks() -> None:
-    """Wrap `MayaBridge._headless_env` and `MayaBridge._launch_env` in-memory so `MayaSceneImport` and `MayaBridge.save_as` inherit the `sitecustomize.py` bootstrap."""
+    """Wrap `MayaBridge._headless_env` in-memory for headless `mayapy` without overriding interactive Maya's `_launch_env`."""
     try:
         from blendertk.env_utils.maya_bridge._maya_bridge import MayaBridge
 
         if getattr(MayaBridge, "_lf_headless_hooked", False):
             return
         orig_headless = MayaBridge._headless_env
-        orig_launch = MayaBridge._launch_env
 
         @staticmethod
         def _wrapped_headless_env():
             base = orig_headless()
             return ensure_mayapy_sitecustomize_env(base)
 
-        @staticmethod
-        def _wrapped_launch_env():
-            base = orig_launch()
-            return ensure_mayapy_sitecustomize_env(base)
-
         MayaBridge._headless_env = _wrapped_headless_env
-        MayaBridge._launch_env = _wrapped_launch_env
         MayaBridge._lf_headless_hooked = True
     except Exception:
         pass
@@ -268,6 +281,9 @@ def import_maya_scene(
     except Exception as exc:
         err_msg = str(exc)
 
+    global _last_imported_source_path
+    _last_imported_source_path = str(preflight["source_path"])
+
     sig = preflight_report.capture_blender_scene_signature(
         imported_objs if imported_objs else None
     )
@@ -302,9 +318,10 @@ def save_as_maya_scene(
     if dst.suffix.lower() not in (".ma", ".mb"):
         dst = dst.with_suffix(".ma")
 
+    effective_protected = protected_source_path or _last_imported_source_path
     # Never overwrite protected original source file unless explicitly approved
-    if protected_source_path and not allow_overwrite_source:
-        src_abs = Path(os.path.abspath(os.path.expanduser(str(protected_source_path))))
+    if effective_protected and not allow_overwrite_source:
+        src_abs = Path(os.path.abspath(os.path.expanduser(str(effective_protected))))
         if dst.resolve() == src_abs.resolve():
             return {
                 "ok": False,

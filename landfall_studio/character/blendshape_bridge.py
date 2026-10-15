@@ -127,17 +127,17 @@ def compute_tent_weight(master_val: float, w: float, w_prev: float, w_next: floa
 
 def evaluate_correctives_deterministic(
     obj_or_name: Any,
-    strip_conflicting_drivers_if_multi_master: bool = True,
+    strip_conflicting_drivers_if_multi_master: bool = False,
 ) -> Dict[str, Any]:
     """Deterministically evaluate all `_tween_w###` corrective shape key weights on `obj`.
 
     Key insight: Blender's C++ depsgraph bug ONLY triggers when scripted drivers (`anim.drivers`)
     coexist with multiple animated master keys on the same `Key` datablock. Plain (un-driven) shape
     keys on the same `Key` datablock blend 100% accurately in `Object.to_mesh()`!
-    Therefore, when 2+ master keys are present (or `strip_conflicting_drivers_if_multi_master=True`),
-    removing the scripted driver from `_tween_w###` and setting `corr_kb.value = compute_tent_weight(...)`
-    directly in Python makes both `Object.to_mesh()` and the 3D Viewport match the exact piecewise-linear
-    in-between formula across ALL master keys simultaneously!
+    By default (`strip_conflicting_drivers_if_multi_master=False`), drivers on corrective shape keys
+    are NEVER deleted during timeline scrubbing or rendering; instead, if a true multi-master animation
+    hazard is detected (`hazard_info["hazard_detected"]`), conflicting corrective driver FCurves are
+    muted non-destructively (or stripped only when explicitly requested).
     """
     import bpy
 
@@ -168,7 +168,10 @@ def evaluate_correctives_deterministic(
             master_values[kb.name] = float(kb.value)
 
     hazard_info = detect_multi_master_driver_hazard(obj)
-    is_multi_master = len(master_values) >= 2 or hazard_info["hazard_detected"]
+    # Only flag multi-master hazard when 2+ master keys are actually animated with keyframes
+    is_multi_master = bool(hazard_info["hazard_detected"]) or (
+        strip_conflicting_drivers_if_multi_master and len(hazard_info.get("animated_master_keys", ())) >= 2
+    )
 
     evaluated_correctives: Dict[str, float] = {}
     drivers_stripped: List[str] = []
@@ -414,7 +417,7 @@ def apply_blendshape_tweens(
     det_eval = {}
     if use_deterministic_multi_master:
         det_eval = evaluate_correctives_deterministic(
-            b_obj, strip_conflicting_drivers_if_multi_master=True
+            b_obj, strip_conflicting_drivers_if_multi_master=False
         )
 
     uv_mat_check = topology.verify_uvs_and_materials_preserved(b_obj, uv_mat_snap)
@@ -432,7 +435,7 @@ def apply_blendshape_tweens(
 
 
 def _on_frame_change_post(scene: Any, *_args: Any) -> None:
-    """Keep multi-master corrective shape keys synchronized during timeline scrubbing."""
+    """Keep corrective shape keys synchronized during timeline scrubbing without deleting any drivers."""
     try:
         for obj in getattr(scene, "objects", ()):
             if getattr(obj, "type", None) != "MESH" or getattr(obj, "data", None) is None:
@@ -441,7 +444,7 @@ def _on_frame_change_post(scene: Any, *_args: Any) -> None:
             if sk is None or len(sk.key_blocks) < 3:
                 continue
             if any(_CORRECTIVE_INFIX in kb.name for kb in sk.key_blocks):
-                evaluate_correctives_deterministic(obj, strip_conflicting_drivers_if_multi_master=True)
+                evaluate_correctives_deterministic(obj, strip_conflicting_drivers_if_multi_master=False)
     except Exception:
         pass
 

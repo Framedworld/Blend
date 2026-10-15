@@ -157,20 +157,82 @@ def set_vertex_group_lock(
     }
 
 
+_NON_SKIN_GROUP_KEYWORDS = (
+    "_mask",
+    "mask_",
+    "_pin",
+    "pin_",
+    "cloth_pin",
+    "hair_mask",
+    "_selection",
+    "selection_",
+)
+
+
+def _get_skin_deform_group_indices(obj: Any) -> Set[int]:
+    """Return vertex group indices that represent skin deform influences (excluding mask/pin/modifier groups)."""
+    vgs = list(getattr(obj, "vertex_groups", ()))
+    if not vgs:
+        return set()
+
+    arm_mods = [m for m in getattr(obj, "modifiers", ()) if m.type == "ARMATURE" and getattr(m, "object", None)]
+    arm_obj = arm_mods[0].object if arm_mods else (obj.parent if getattr(getattr(obj, "parent", None), "type", None) == "ARMATURE" else None)
+    bone_names: Set[str] = set()
+    if arm_obj is not None and getattr(arm_obj, "data", None) is not None:
+        bone_names = {b.name for b in arm_obj.data.bones if getattr(b, "use_deform", True)}
+
+    # Collect vertex groups explicitly referenced by non-armature modifiers (Mask, Cloth pin, etc.)
+    non_skin_mod_groups: Set[str] = set()
+    for m in getattr(obj, "modifiers", ()):
+        if m.type == "ARMATURE":
+            continue
+        vg_attr = getattr(m, "vertex_group", "")
+        if vg_attr:
+            non_skin_mod_groups.add(vg_attr)
+        settings = getattr(m, "settings", None)
+        if settings is not None:
+            for attr in ("vertex_group_mass", "vertex_group_structural_stiffness", "vertex_group_bending", "vertex_group_shrink"):
+                val = getattr(settings, attr, "")
+                if val:
+                    non_skin_mod_groups.add(val)
+
+    if bone_names:
+        matched = {vg.index for vg in vgs if vg.name in bone_names and vg.name not in non_skin_mod_groups}
+        if matched:
+            return matched
+
+    skin_indices: Set[int] = set()
+    for vg in vgs:
+        low = vg.name.lower()
+        if vg.name in non_skin_mod_groups:
+            continue
+        if low in ("mask", "pin", "cloth", "hair", "selection") or any(kw in low for kw in _NON_SKIN_GROUP_KEYWORDS):
+            continue
+        skin_indices.add(vg.index)
+    return skin_indices
+
+
 def _normalize_single_vertex(
     obj: Any,
     v_idx: int,
     respect_locks: bool = True,
     pinned_group_idx: Optional[int] = None,
+    skin_indices: Optional[Set[int]] = None,
 ) -> None:
-    """Normalize weights on vertex `v_idx` so total weight == 1.0 without altering locked groups."""
+    """Normalize skin deform weights on vertex `v_idx` so total skin weight == 1.0 without altering locked or non-skin groups."""
     v = obj.data.vertices[v_idx]
     vgs = obj.vertex_groups
-    locked_indices = {vg.index for vg in vgs if vg.lock_weight} if respect_locks else set()
-    if pinned_group_idx is not None:
+    if skin_indices is None:
+        skin_indices = _get_skin_deform_group_indices(obj)
+    locked_indices = {vg.index for vg in vgs if vg.lock_weight and vg.index in skin_indices} if respect_locks else set()
+    if pinned_group_idx is not None and pinned_group_idx in skin_indices:
         locked_indices = set(locked_indices) | {pinned_group_idx}
 
-    weights = {int(g.group): float(g.weight) for g in v.groups if int(g.group) < len(vgs)}
+    weights = {
+        int(g.group): float(g.weight)
+        for g in v.groups
+        if int(g.group) < len(vgs) and int(g.group) in skin_indices
+    }
     if not weights:
         return
 
@@ -228,17 +290,18 @@ def set_vertex_weight_respecting_locks(
         return {"ok": False, "blocked": True, "reason": f"Vertex index {v_idx} out of range."}
 
     locked_snap = snapshot_locked_weights(obj)
+    skin_indices = _get_skin_deform_group_indices(obj)
 
     v = obj.data.vertices[v_idx]
-    locked_indices = {g.index for g in obj.vertex_groups if g.lock_weight}
+    locked_indices = {g.index for g in obj.vertex_groups if g.lock_weight and g.index in skin_indices}
     locked_sum = sum(float(g.weight) for g in v.groups if g.group in locked_indices)
 
-    max_allowed = max(0.0, 1.0 - locked_sum) if normalize else 1.0
+    max_allowed = max(0.0, 1.0 - locked_sum) if (normalize and vg.index in skin_indices) else 1.0
     clamped = max(0.0, min(max_allowed, float(weight)))
     vg.add([v_idx], clamped, "REPLACE")
 
-    if normalize:
-        _normalize_single_vertex(obj, v_idx, respect_locks=True, pinned_group_idx=vg.index)
+    if normalize and vg.index in skin_indices:
+        _normalize_single_vertex(obj, v_idx, respect_locks=True, pinned_group_idx=vg.index, skin_indices=skin_indices)
 
     lock_check = verify_locked_weights_preserved(obj, locked_snap)
     return {
@@ -256,17 +319,18 @@ def normalize_skin_weights(
     obj_or_name: Any,
     respect_locks: bool = True,
 ) -> Dict[str, Any]:
-    """Normalize all vertex skin weights on `obj` while strictly preserving locked vertex groups."""
+    """Normalize all vertex skin weights on `obj` while strictly preserving locked and non-skin vertex groups."""
     obj = topology._resolve_mesh_obj(obj_or_name)
     if obj is None:
         return {"ok": False, "error": "Object is not a valid MESH."}
 
     uv_mat_snap = topology.snapshot_uvs_and_materials(obj)
     locked_snap = snapshot_locked_weights(obj)
+    skin_indices = _get_skin_deform_group_indices(obj)
 
     n_verts = len(obj.data.vertices)
     for v_idx in range(n_verts):
-        _normalize_single_vertex(obj, v_idx, respect_locks=respect_locks)
+        _normalize_single_vertex(obj, v_idx, respect_locks=respect_locks, skin_indices=skin_indices)
 
     obj.data.update()
     lock_check = verify_locked_weights_preserved(obj, locked_snap)
@@ -288,7 +352,7 @@ def prune_small_weights(
     respect_locks: bool = True,
     normalize: bool = True,
 ) -> Dict[str, Any]:
-    """Prune unlocked weights below `threshold` and cap per-vertex influences to `max_influences`."""
+    """Prune unlocked skin deform weights below `threshold` and cap per-vertex skin influences to `max_influences`."""
     obj = topology._resolve_mesh_obj(obj_or_name)
     if obj is None:
         return {"ok": False, "error": "Object is not a valid MESH."}
@@ -296,12 +360,17 @@ def prune_small_weights(
     uv_mat_snap = topology.snapshot_uvs_and_materials(obj)
     locked_snap = snapshot_locked_weights(obj)
     vgs = obj.vertex_groups
-    locked_indices = {vg.index for vg in vgs if vg.lock_weight} if respect_locks else set()
+    skin_indices = _get_skin_deform_group_indices(obj)
+    locked_indices = {vg.index for vg in vgs if vg.lock_weight and vg.index in skin_indices} if respect_locks else set()
 
     pruned_entries = 0
     for v in obj.data.vertices:
         v_idx = v.index
-        entries = [(int(g.group), float(g.weight)) for g in v.groups if int(g.group) < len(vgs)]
+        entries = [
+            (int(g.group), float(g.weight))
+            for g in v.groups
+            if int(g.group) < len(vgs) and int(g.group) in skin_indices
+        ]
         if not entries:
             continue
 
@@ -328,7 +397,7 @@ def prune_small_weights(
                 pruned_entries += 1
 
         if normalize:
-            _normalize_single_vertex(obj, v_idx, respect_locks=respect_locks)
+            _normalize_single_vertex(obj, v_idx, respect_locks=respect_locks, skin_indices=skin_indices)
 
     obj.data.update()
     lock_check = verify_locked_weights_preserved(obj, locked_snap)
@@ -351,7 +420,7 @@ def weight_hammer_vertices(
     respect_locks: bool = True,
     normalize: bool = True,
 ) -> Dict[str, Any]:
-    """Maya `Weight Hammer`: set target vertices' unlocked weights to the average of their 1-ring neighbors."""
+    """Maya `Weight Hammer`: set target vertices' unlocked skin weights to the average of their 1-ring neighbors."""
     obj = topology._resolve_mesh_obj(obj_or_name)
     if obj is None:
         return {"ok": False, "error": "Object is not a valid MESH."}
@@ -377,8 +446,9 @@ def weight_hammer_vertices(
     locked_snap = snapshot_locked_weights(obj)
 
     vgs = obj.vertex_groups
-    locked_indices = {vg.index for vg in vgs if vg.lock_weight} if respect_locks else set()
-    unlocked_indices = [vg.index for vg in vgs if vg.index not in locked_indices]
+    skin_indices = _get_skin_deform_group_indices(obj)
+    locked_indices = {vg.index for vg in vgs if vg.lock_weight and vg.index in skin_indices} if respect_locks else set()
+    unlocked_indices = [vg.index for vg in vgs if vg.index in skin_indices and vg.index not in locked_indices]
 
     for v_idx in targets:
         nbrs = adj.get(v_idx, [])
@@ -394,7 +464,7 @@ def weight_hammer_vertices(
                 except Exception:
                     pass
         if normalize:
-            _normalize_single_vertex(obj, v_idx, respect_locks=respect_locks)
+            _normalize_single_vertex(obj, v_idx, respect_locks=respect_locks, skin_indices=skin_indices)
 
     mesh.update()
     lock_check = verify_locked_weights_preserved(obj, locked_snap)
@@ -430,7 +500,7 @@ def mirror_skin_weights(
     respect_locks: bool = True,
     normalize: bool = True,
 ) -> Dict[str, Any]:
-    """Mirror skin weights across `axis` (`PLUS_TO_MINUS` or `MINUS_TO_PLUS`) while respecting locked groups."""
+    """Mirror skin weights across `axis` (`PLUS_TO_MINUS` or `MINUS_TO_PLUS`) while respecting locked and non-skin groups."""
     obj = topology._resolve_mesh_obj(obj_or_name)
     if obj is None:
         return {"ok": False, "error": "Object is not a valid MESH."}
@@ -451,15 +521,19 @@ def mirror_skin_weights(
     locked_snap = snapshot_locked_weights(obj)
 
     vgs = obj.vertex_groups
-    locked_indices = {vg.index for vg in vgs if vg.lock_weight} if respect_locks else set()
+    skin_indices = _get_skin_deform_group_indices(obj)
+    locked_indices = {vg.index for vg in vgs if vg.lock_weight and vg.index in skin_indices} if respect_locks else set()
 
-    # Map each group index to its mirrored group index (creating target group if needed)
+    # Map each skin group index to its mirrored group index (creating target group if needed)
     mirror_group_map: Dict[int, int] = {}
     for vg in list(vgs):
+        if vg.index not in skin_indices:
+            continue
         mir_name = _resolve_mirror_group_name(vg.name)
         mir_vg = vgs.get(mir_name)
         if mir_vg is None:
             mir_vg = vgs.new(name=mir_name)
+        skin_indices.add(mir_vg.index)
         mirror_group_map[vg.index] = mir_vg.index
 
     mirrored_verts = 0
@@ -474,22 +548,24 @@ def mirror_skin_weights(
         _co, src_v_idx, _dist = kd.find(query)
         src_weights = all_weights[src_v_idx]
 
-        # Clear unlocked weights on target vertex first
+        # Clear unlocked skin weights on target vertex first (leaving non-skin mask/pin groups untouched)
         for vg in vgs:
-            if vg.index not in locked_indices:
+            if vg.index in skin_indices and vg.index not in locked_indices:
                 try:
                     vg.remove([v.index])
                 except Exception:
                     pass
 
         for src_gi, w in src_weights.items():
+            if src_gi not in skin_indices:
+                continue
             dst_gi = mirror_group_map.get(src_gi, src_gi)
             if dst_gi in locked_indices:
                 continue
             vgs[dst_gi].add([v.index], float(w), "REPLACE")
 
         if normalize:
-            _normalize_single_vertex(obj, v.index, respect_locks=respect_locks)
+            _normalize_single_vertex(obj, v.index, respect_locks=respect_locks, skin_indices=skin_indices)
         mirrored_verts += 1
 
     mesh.update()
