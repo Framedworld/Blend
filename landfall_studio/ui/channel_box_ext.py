@@ -1365,6 +1365,8 @@ class MayaChannelBoxExtensionWidget:
             if tbl is not None:
                 tbl.setMinimumHeight(0)
                 tbl.setMaximumHeight(180)
+                if tbl.columnCount() > 0 and tbl.columnWidth(0) < 108:
+                    tbl.setColumnWidth(0, 108)
                 if getattr(tbl, "_lf_axis_delegate", None) is not None:
                     tbl.setItemDelegateForColumn(0, tbl._lf_axis_delegate)
                 tbl.viewport().update()

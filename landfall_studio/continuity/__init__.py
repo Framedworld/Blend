@@ -250,8 +250,58 @@ def _iter_view3d_spaces(context=None) -> List[Any]:
     return spaces
 
 
+_eevee_ssao_enabled: bool = True
+_eevee_shadows_enabled: bool = True
+_eevee_raytracing_enabled: bool = True
+
+
+def _ensure_eevee_engine(scene: Any) -> str:
+    if scene is None:
+        return "BLENDER_EEVEE"
+    rnd = getattr(scene, "render", None)
+    if rnd is None:
+        return "BLENDER_EEVEE"
+    for candidate in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
+        try:
+            rnd.engine = candidate
+            break
+        except Exception:
+            continue
+    return str(getattr(rnd, "engine", "BLENDER_EEVEE"))
+
+
+def _apply_eevee_hardware_settings(scene: Any, spaces: List[Any]) -> None:
+    if scene is not None:
+        eevee = getattr(scene, "eevee", None)
+        if eevee is not None:
+            for attr, val in (
+                ("use_shadows", _eevee_shadows_enabled),
+                ("use_raytracing", _eevee_raytracing_enabled),
+                ("use_gtao", _eevee_ssao_enabled),
+                ("taa_samples", 16),
+            ):
+                if hasattr(eevee, attr):
+                    try:
+                        setattr(eevee, attr, val)
+                    except Exception:
+                        pass
+    for sp in spaces:
+        shading = getattr(sp, "shading", None)
+        if shading is not None:
+            for attr, val in (
+                ("show_cavity", _eevee_ssao_enabled),
+                ("show_shadows", _eevee_shadows_enabled),
+                ("show_specular_highlight", True),
+            ):
+                if hasattr(shading, attr):
+                    try:
+                        setattr(shading, attr, val)
+                    except Exception:
+                        pass
+
+
 def get_viewport_shading_state(context=None) -> Dict[str, Any]:
-    """Return the current Maya `4/5/6/7` viewport shading mode and quick-toggle state."""
+    """Return the current Maya `4/5/6/7` Viewport 2.0 (EEVEE) shading mode and hardware feature state."""
     global _active_maya_shading_mode
     spaces = _iter_view3d_spaces(context)
     sp = spaces[0] if spaces else None
@@ -264,6 +314,9 @@ def get_viewport_shading_state(context=None) -> Dict[str, Any]:
     wire_over = bool(getattr(overlay, "show_wireframes", False)) if overlay is not None else False
 
     ctx = context or (bpy.context if bpy is not None else None)
+    scene = getattr(ctx, "scene", None) if ctx is not None else None
+    engine = str(getattr(getattr(scene, "render", None), "engine", "BLENDER_EEVEE")) if scene is not None else "BLENDER_EEVEE"
+
     active_obj = getattr(getattr(ctx, "view_layer", None), "objects", None)
     act = active_obj.active if active_obj else None
     if act is not None and getattr(act, "show_wire", False):
@@ -282,21 +335,73 @@ def get_viewport_shading_state(context=None) -> Dict[str, Any]:
             _active_maya_shading_mode = "7" if (use_lights or bl_type == "RENDERED") else "6"
 
     spec = MAYA_SHADING_MODES.get(_active_maya_shading_mode, MAYA_SHADING_MODES["6"])
+    if engine == "CYCLES" and bl_type == "RENDERED":
+        renderer_label = "Cycles (Path Traced)"
+    else:
+        renderer_label = "Viewport 2.0 (EEVEE)"
+
     return {
         "ok": True,
         "maya_mode": _active_maya_shading_mode,
         "maya_id": spec["id"],
         "maya_label": spec["label"],
         "blender_shading_type": bl_type,
+        "renderer_engine": engine,
+        "renderer_label": renderer_label,
         "use_scene_lights": use_lights,
         "wire_on_shaded": wire_over,
         "xray": xray,
         "isolated": isolated,
+        "eevee_ssao": _eevee_ssao_enabled,
+        "eevee_shadows": _eevee_shadows_enabled,
+        "eevee_raytracing": _eevee_raytracing_enabled,
+        "eevee_msaa": 16,
     }
 
 
+def set_viewport_renderer(engine: str = "EEVEE", context=None) -> Dict[str, Any]:
+    """Switch the active viewport renderer between Maya `Viewport 2.0 (EEVEE)` and `Cycles`."""
+    ctx = context or (bpy.context if bpy is not None else None)
+    scene = getattr(ctx, "scene", None) if ctx is not None else None
+    spaces = _iter_view3d_spaces(ctx)
+    norm = str(engine or "EEVEE").strip().upper()
+    if "CYCLE" in norm:
+        if scene is not None and hasattr(scene, "render"):
+            try:
+                scene.render.engine = "CYCLES"
+            except Exception:
+                pass
+        for sp in spaces:
+            if hasattr(sp, "shading"):
+                try:
+                    sp.shading.type = "RENDERED"
+                except Exception:
+                    pass
+    else:
+        _ensure_eevee_engine(scene)
+        _apply_eevee_hardware_settings(scene, spaces)
+    return get_viewport_shading_state(ctx)
+
+
+def toggle_viewport_20_feature(feature: str = "SSAO", enable: Optional[bool] = None, context=None) -> Dict[str, Any]:
+    """Toggle or set a Maya Viewport 2.0 (EEVEE) hardware feature (`SSAO`, `SHADOWS`, `RAYTRACING`)."""
+    global _eevee_ssao_enabled, _eevee_shadows_enabled, _eevee_raytracing_enabled
+    ctx = context or (bpy.context if bpy is not None else None)
+    scene = getattr(ctx, "scene", None) if ctx is not None else None
+    spaces = _iter_view3d_spaces(ctx)
+    norm = str(feature or "SSAO").strip().upper()
+    if norm in ("SSAO", "AO", "CAVITY"):
+        _eevee_ssao_enabled = (not _eevee_ssao_enabled) if enable is None else bool(enable)
+    elif norm in ("SHADOWS", "SHADOW"):
+        _eevee_shadows_enabled = (not _eevee_shadows_enabled) if enable is None else bool(enable)
+    elif norm in ("RAYTRACING", "RAYTRACE", "SSR"):
+        _eevee_raytracing_enabled = (not _eevee_raytracing_enabled) if enable is None else bool(enable)
+    _apply_eevee_hardware_settings(scene, spaces)
+    return get_viewport_shading_state(ctx)
+
+
 def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
-    """Set the Maya Viewport 2.0 shading mode (`4` Wireframe, `5` Smooth Shaded, `6` Textured, `7` Use All Lights) or toggle display flags."""
+    """Set the Maya Viewport 2.0 (EEVEE) shading mode (`4` Wireframe, `5` Smooth Shaded, `6` Textured EEVEE, `7` Use All Lights EEVEE) or toggle display flags."""
     global _active_maya_shading_mode
     norm = str(mode_key or "5").strip().upper()
     alias_map = {
@@ -307,6 +412,7 @@ def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
         "SOLID": "5",
         "TEXTURED": "6",
         "MATERIAL": "6",
+        "EEVEE": "6",
         "ALL_LIGHTS": "7",
         "LIGHTS": "7",
         "RENDERED": "7",
@@ -315,6 +421,14 @@ def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
 
     spaces = _iter_view3d_spaces(context)
     ctx = context or (bpy.context if bpy is not None else None)
+    scene = getattr(ctx, "scene", None) if ctx is not None else None
+
+    if norm in ("SSAO", "SHADOWS", "RAYTRACING"):
+        return toggle_viewport_20_feature(norm, context=ctx)
+    if norm in ("RENDERER_EEVEE", "VIEWPORT_20"):
+        return set_viewport_renderer("EEVEE", context=ctx)
+    if norm == "RENDERER_CYCLES":
+        return set_viewport_renderer("CYCLES", context=ctx)
 
     if norm == "WIRE_ON_SHADED":
         st = get_viewport_shading_state(ctx)
@@ -354,6 +468,10 @@ def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
     _active_maya_shading_mode = norm
     spec = MAYA_SHADING_MODES[norm]
 
+    if norm in ("6", "7"):
+        _ensure_eevee_engine(scene)
+        _apply_eevee_hardware_settings(scene, spaces)
+
     for sp in spaces:
         shading = getattr(sp, "shading", None)
         if shading is None:
@@ -365,6 +483,7 @@ def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
                 shading.type = "SOLID"
                 shading.light = "STUDIO"
                 shading.color_type = "MATERIAL"
+                shading.show_cavity = _eevee_ssao_enabled
             elif norm == "6":
                 try:
                     shading.type = "MATERIAL"
@@ -387,7 +506,7 @@ def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
         from ..ui import desktop, shelf
 
         shelf.refresh_top_shelf_status()
-        desktop.set_command_feedback("modelEditor -displayAppearance", spec["label"])
+        desktop.set_command_feedback("modelEditor -renderer vp2Renderer", f"{spec['label']} • Viewport 2.0 (EEVEE)")
     except Exception:
         pass
 

@@ -221,6 +221,26 @@ def _text_w(font: int, size: float, text: str) -> float:
     return blf.dimensions(font, text)[0]
 
 
+MM_COMPASS_LABELS: Tuple[str, ...] = ("W", "E", "S", "N", "NW", "NE", "SW", "SE")
+
+MM_HOTKEY_BADGES: Dict[str, str] = {
+    "Vertex": "F9",
+    "Edge": "F10",
+    "Face": "F11",
+    "UV Mode": "F12",
+    "Object Mode": "F8",
+    "Multi": "F8+",
+    "Extrude": "Ctrl+E",
+    "Bevel": "Ctrl+B",
+    "Loop Cut": "Ctrl+R",
+    "Target Weld": "Weld",
+    "Quad Draw": "Live",
+    "Make Live": "Magnet",
+    "Center Pivot": "Hold D",
+    "Freeze Xforms": "Freeze",
+}
+
+
 def _rects_batch(rects: List[Tuple[float, float, float, float]]):
     verts, tris = [], []
     for x, y, w, h in rects:
@@ -229,15 +249,76 @@ def _rects_batch(rects: List[Tuple[float, float, float, float]]):
         tris.extend(((n, n + 1, n + 2), (n, n + 2, n + 3)))
     if not verts:
         return None
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-    return batch_for_shader(shader, "TRIS", {"pos": verts}, indices=tris)
+    try:
+        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        return batch_for_shader(shader, "TRIS", {"pos": verts}, indices=tris)
+    except Exception:
+        return None
+
+
+def _thick_line_batch(x0: float, y0: float, x1: float, y1: float, thickness: float = 2.4):
+    import math
+
+    dx, dy = x1 - x0, y1 - y0
+    dist = math.hypot(dx, dy)
+    if dist < 1e-3:
+        return None
+    nx, ny = -dy / dist * (thickness * 0.5), dx / dist * (thickness * 0.5)
+    verts = (
+        (x0 + nx, y0 + ny),
+        (x0 - nx, y0 - ny),
+        (x1 - nx, y1 - ny),
+        (x1 + nx, y1 + ny),
+    )
+    try:
+        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        return batch_for_shader(shader, "TRIS", {"pos": verts}, indices=((0, 1, 2), (0, 2, 3)))
+    except Exception:
+        return None
+
+
+def _ring_batch(cx: float, cy: float, radius: float, thickness: float = 2.0, segments: int = 36):
+    import math
+
+    r_in = max(1.0, radius - thickness * 0.5)
+    r_out = radius + thickness * 0.5
+    verts, indices = [], []
+    v_idx = 0
+    for i in range(segments):
+        a0 = (2.0 * math.pi * i) / segments
+        a1 = (2.0 * math.pi * (i + 1)) / segments
+        c0, s0 = math.cos(a0), math.sin(a0)
+        c1, s1 = math.cos(a1), math.sin(a1)
+        verts.extend(
+            (
+                (cx + c0 * r_in, cy + s0 * r_in),
+                (cx + c0 * r_out, cy + s0 * r_out),
+                (cx + c1 * r_out, cy + s1 * r_out),
+                (cx + c1 * r_in, cy + s1 * r_in),
+            )
+        )
+        indices.append((v_idx, v_idx + 1, v_idx + 2))
+        indices.append((v_idx, v_idx + 2, v_idx + 3))
+        v_idx += 4
+    try:
+        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        return batch_for_shader(shader, "TRIS", {"pos": verts}, indices=indices)
+    except Exception:
+        return None
+
+
+def _split_row_badge(label: str) -> Tuple[str, str]:
+    if "(" in label and label.endswith(")"):
+        base, _, rest = label.rpartition("(")
+        return base.strip(), rest[:-1].strip()
+    return label, MM_HOTKEY_BADGES.get(label, "")
 
 
 def _build_mm_layout(context) -> None:
     font = 0
     scale = getattr(context.preferences.system, "ui_scale", 1.0) or 1.0
-    size = 12.0 * scale
-    pad_x, pad_y, row_h = 10.0 * scale, 5.0 * scale, 22.0 * scale
+    size = 11.5 * scale
+    pad_x, pad_y, row_h = 11.0 * scale, 5.5 * scale, 24.0 * scale
     cx, cy = _studio_mm["x"], _studio_mm["y"]
     menu_mode = _studio_mm["menu_mode"]
 
@@ -247,12 +328,20 @@ def _build_mm_layout(context) -> None:
     chips = []
     for index, (label, path, props, branch) in enumerate(radial):
         dx, dy = MM_DIRS[index]
-        w = _text_w(font, size, label) + pad_x * 2
+        compass = MM_COMPASS_LABELS[index] if index < len(MM_COMPASS_LABELS) else ""
+        hk_badge = MM_HOTKEY_BADGES.get(label, "▸" if branch else "")
+        badge_extra = (_text_w(font, 9.0 * scale, hk_badge) + 14.0 * scale) if hk_badge else 0.0
+        compass_extra = 22.0 * scale
+        w = max(112.0 * scale, _text_w(font, size, label) + pad_x * 2 + compass_extra + badge_extra)
         x, y = cx + dx * scale, cy - dy * scale
         chips.append(
             {
                 "key": ("radial", index),
                 "label": label,
+                "compass": compass,
+                "hotkey": hk_badge,
+                "cx": x,
+                "cy": y,
                 "branch": bool(branch),
                 "branch_name": branch,
                 "open": branch is not None and branch == _studio_mm["list"],
@@ -266,12 +355,13 @@ def _build_mm_layout(context) -> None:
     if _studio_mm["list"] not in LIST_DEFS:
         _studio_mm["list"] = _base_list_for_mode(context, menu_mode)
     items = LIST_DEFS[_studio_mm["list"]]
-    two = len(items) > 7
+    two = len(items) > 6
     half = (len(items) + 1) // 2 if two else len(items)
-    border, gap = 5.0 * scale, 6.0 * scale
-    col_w = max(_text_w(font, size, t) for t, _p, _k in items) + pad_x * 2
+    border, gap = 6.0 * scale, 6.0 * scale
+    col_w = max(168.0 * scale, max(_text_w(font, size, t) for t, _p, _k in items) + pad_x * 2 + 18.0 * scale)
     total_w = border * 2 + col_w * (2 if two else 1) + (gap if two else 0)
-    total_h = border * 2 + half * row_h
+    list_header_h = 20.0 * scale
+    total_h = border * 2 + half * row_h + list_header_h
 
     ax, ay = (
         _studio_mm["anchor"]
@@ -284,25 +374,27 @@ def _build_mm_layout(context) -> None:
     for index, (label, _path, _props) in enumerate(items):
         column = 1 if (two and index >= half) else 0
         row = index - half if column else index
+        clean_lbl, row_hk = _split_row_badge(label)
         rows.append(
             {
                 "key": ("list", index),
-                "label": label,
+                "label": clean_lbl,
+                "hotkey": row_hk,
                 "x": left + border + column * (col_w + gap),
-                "y": top - border - (row + 1) * row_h,
+                "y": top - list_header_h - border - (row + 1) * row_h,
                 "w": col_w,
-                "h": row_h,
+                "h": row_h - 1.0,
             }
         )
 
     header_titles = {
-        "COMPONENT": "COMPONENT / OBJECT [RMB]",
-        "TOOL": "MODELING TOOLS [Shift+RMB]",
-        "CONVERT": "CONVERT SELECTION [Ctrl+RMB]",
+        "COMPONENT": "MAYA MARKING MENU  •  COMPONENT / OBJECT [RMB]",
+        "TOOL": "MAYA MARKING MENU  •  MODELING TOOLS [Shift+RMB]",
+        "CONVERT": "MAYA MARKING MENU  •  CONVERT SELECTION [Ctrl+RMB]",
     }
-    header_text = header_titles.get(menu_mode, "MARKING MENU")
-    header_w = _text_w(font, 10.5 * scale, header_text) + pad_x * 2
-    header_rect = (cx - header_w * 0.5, cy + 122.0 * scale, header_w, 19.0 * scale)
+    header_text = header_titles.get(menu_mode, "MAYA MARKING MENU")
+    header_w = _text_w(font, 10.5 * scale, header_text) + pad_x * 2.4
+    header_rect = (cx - header_w * 0.5, cy + 128.0 * scale, header_w, 22.0 * scale)
 
     _studio_mm["rects"] = [
         (c["key"], c["x"], c["y"], c["w"], c["h"]) for c in chips
@@ -315,6 +407,7 @@ def _build_mm_layout(context) -> None:
         if c["branch"] and not c["open"]
     ]
     opened = [(c["x"], c["y"], c["w"], c["h"]) for c in chips if c["open"]]
+    accents = [(c["x"], c["y"], 2.5 * scale, c["h"]) for c in chips]
     px, py, pw, ph = (left, top - total_h, total_w, total_h)
     edge = max(1.0, scale)
 
@@ -328,15 +421,21 @@ def _build_mm_layout(context) -> None:
         "rows": rows,
         "header_text": header_text,
         "header_rect": header_rect,
+        "list_header_rect": (px, top - list_header_h, pw, list_header_h),
         "panel": (px, py, pw, ph),
         "batch_plain": _rects_batch(plain),
         "batch_branch": _rects_batch(branchy),
         "batch_open": _rects_batch(opened),
+        "batch_accents": _rects_batch(accents),
         "batch_header": _rects_batch([header_rect]),
+        "batch_header_edge": _rects_batch(
+            [(header_rect[0] - edge, header_rect[1] - edge, header_rect[2] + edge * 2, header_rect[3] + edge * 2)]
+        ),
         "batch_border": _rects_batch(
             [(px - edge, py - edge, pw + edge * 2, ph + edge * 2)]
         ),
         "batch_panel": _rects_batch([(px, py, pw, ph)]),
+        "batch_list_header": _rects_batch([(px, top - list_header_h, pw, list_header_h)]),
     }
 
 
@@ -345,9 +444,7 @@ def _studio_mm_draw() -> None:
         return
     context = bpy.context
     region = getattr(context, "region", None)
-    if region is None:
-        return
-    if _studio_mm["region"] is not None and region != _studio_mm["region"]:
+    if region is None or getattr(region, "type", "") != "WINDOW":
         return
     if _studio_mm.get("layout") is None:
         _build_mm_layout(context)
@@ -366,48 +463,100 @@ def _studio_mm_draw() -> None:
             shader.uniform_float("color", color)
             batch.draw(shader)
 
-    # Gesture connector line from origin to cursor
     cx, cy = _studio_mm["x"], _studio_mm["y"]
     mx, my = _studio_mm["cursor_x"], _studio_mm["cursor_y"]
+
+    # 1. Subtle radial spoke guide lines from center ring to each radial chip
+    for chip in lay["chips"]:
+        spoke = _thick_line_batch(cx, cy, chip["cx"], chip["cy"], thickness=1.2 * scale)
+        paint(spoke, (0.22, 0.34, 0.44, 0.35))
+
+    # 2. Active directional connector line + origin target ring
     if (mx - cx) ** 2 + (my - cy) ** 2 > 16.0:
-        line_batch = batch_for_shader(
-            shader, "LINES", {"pos": [(cx, cy), (mx, my)]}
-        )
-        paint(line_batch, COL_LINE)
+        conn = _thick_line_batch(cx, cy, mx, my, thickness=2.6 * scale)
+        paint(conn, (0.24, 0.72, 0.96, 0.95))
+    paint(_ring_batch(cx, cy, 13.0 * scale, thickness=2.0 * scale), (0.24, 0.70, 0.94, 0.92))
+    paint(_rects_batch([(cx - 3.0 * scale, cy - 3.0 * scale, 6.0 * scale, 6.0 * scale)]), (0.48, 0.86, 1.0, 1.0))
 
-    paint(lay["batch_header"], COL_PANEL)
-    paint(lay["batch_plain"], COL_BG)
-    paint(lay["batch_branch"], COL_BRANCH)
-    paint(lay["batch_open"], COL_OPEN)
-    paint(lay["batch_border"], COL_BORDER)
-    paint(lay["batch_panel"], COL_PANEL)
+    # 3. Header pill, Radial cards, and Secondary Branch Panel
+    paint(lay["batch_header_edge"], (0.22, 0.64, 0.85, 0.85))
+    paint(lay["batch_header"], (0.09, 0.11, 0.13, 0.95))
+    paint(lay["batch_plain"], (0.11, 0.125, 0.145, 0.95))
+    paint(lay["batch_branch"], (0.14, 0.28, 0.38, 0.96))
+    paint(lay["batch_open"], (0.20, 0.48, 0.64, 0.98))
+    paint(lay["batch_accents"], (0.22, 0.64, 0.85, 0.95))
+    paint(lay["batch_border"], (0.24, 0.34, 0.44, 0.78))
+    paint(lay["batch_panel"], (0.10, 0.115, 0.135, 0.96))
+    paint(lay["batch_list_header"], (0.13, 0.16, 0.19, 0.98))
 
-    # Highlighted item
+    # 4. Highlighted active item (card or row)
     if hot is not None:
         for item in lay["chips"] + lay["rows"]:
             if item["key"] == hot:
                 x, y, w, h = item["x"], item["y"], item["w"], item["h"]
-                g = max(2.0, 2.0 * scale)
-                paint(_rects_batch([(x - g, y - g, w + g * 2, h + g * 2)]), COL_HOT_EDGE)
-                paint(_rects_batch([(x, y, w, h)]), COL_HOT_FILL)
+                g = max(1.5, 1.8 * scale)
+                paint(_rects_batch([(x - g, y - g, w + g * 2, h + g * 2)]), (0.36, 0.78, 0.98, 0.95))
+                paint(_rects_batch([(x, y, w, h)]), (0.14, 0.35, 0.47, 0.98))
                 break
 
-    # Header text
+    # 5. Header text
     hx, hy, _hw, _hh = lay["header_rect"]
-    blf.size(font, 10.5 * scale)
-    blf.color(font, *COL_MUTED)
-    blf.position(font, hx + pad_x, hy + 4.0 * scale, 0)
+    blf.size(font, 10.0 * scale)
+    blf.color(font, 0.49, 0.78, 0.92, 1.0)
+    blf.position(font, hx + pad_x, hy + 5.5 * scale, 0)
     blf.draw(font, lay["header_text"])
 
-    # Chip & row text
-    blf.size(font, size)
-    blf.color(font, *COL_TEXT)
+    # List section header text
+    lhx, lhy, _lhw, _lhh = lay["list_header_rect"]
+    blf.size(font, 8.8 * scale)
+    blf.color(font, 0.54, 0.62, 0.70, 0.92)
+    blf.position(font, lhx + 8.0 * scale, lhy + 5.5 * scale, 0)
+    blf.draw(font, f"QUICK ACTIONS  •  {str(_studio_mm['list']).upper()}")
+
+    # 6. Radial Chip labels + Compass badges + Right-aligned Hotkey badges
     for chip in lay["chips"]:
-        blf.position(font, chip["x"] + pad_x, chip["y"] + pad_y + scale, 0)
+        is_hot = chip["key"] == hot
+        cx_box, cy_box, cw_box, ch_box = chip["x"], chip["y"], chip["w"], chip["h"]
+        # Compass pill on left
+        blf.size(font, 8.5 * scale)
+        blf.color(font, 0.36, 0.76, 0.95, 0.95) if is_hot else blf.color(font, 0.48, 0.56, 0.64, 0.88)
+        blf.position(font, cx_box + 7.0 * scale, cy_box + pad_y + 1.5 * scale, 0)
+        blf.draw(font, chip["compass"])
+
+        # Main label
+        blf.size(font, size)
+        blf.color(font, 0.98, 0.99, 1.0, 1.0) if is_hot else blf.color(font, *COL_TEXT)
+        blf.position(font, cx_box + 26.0 * scale, cy_box + pad_y + 1.0 * scale, 0)
         blf.draw(font, chip["label"])
-    for row in lay["rows"]:
-        blf.position(font, row["x"] + pad_x, row["y"] + pad_y + scale, 0)
+
+        # Right-aligned hotkey badge
+        hk = chip.get("hotkey", "")
+        if hk:
+            blf.size(font, 8.5 * scale)
+            hkw = _text_w(font, 8.5 * scale, hk)
+            bx = cx_box + cw_box - hkw - 10.0 * scale
+            by = cy_box + 3.5 * scale
+            paint(_rects_batch([(bx - 4.0 * scale, by, hkw + 8.0 * scale, ch_box - 7.0 * scale)]), (0.08, 0.10, 0.12, 0.85))
+            blf.color(font, 0.48, 0.82, 0.98, 0.98) if is_hot else blf.color(font, 0.58, 0.66, 0.74, 0.90)
+            blf.position(font, bx, cy_box + pad_y + 1.5 * scale, 0)
+            blf.draw(font, hk)
+
+    # 7. Secondary Branch List rows + Right-aligned Hotkey badges
+    for idx_r, row in enumerate(lay["rows"]):
+        is_hot = row["key"] == hot
+        if idx_r % 2 == 1 and not is_hot:
+            paint(_rects_batch([(row["x"], row["y"], row["w"], row["h"])]), (0.115, 0.13, 0.15, 0.65))
+        blf.size(font, 10.5 * scale)
+        blf.color(font, 0.98, 0.99, 1.0, 1.0) if is_hot else blf.color(font, 0.86, 0.90, 0.94, 0.96)
+        blf.position(font, row["x"] + 8.0 * scale, row["y"] + pad_y, 0)
         blf.draw(font, row["label"])
+        rhk = row.get("hotkey", "")
+        if rhk:
+            blf.size(font, 8.5 * scale)
+            rhkw = _text_w(font, 8.5 * scale, rhk)
+            blf.color(font, 0.45, 0.78, 0.95, 0.95) if is_hot else blf.color(font, 0.52, 0.58, 0.65, 0.88)
+            blf.position(font, row["x"] + row["w"] - rhkw - 8.0 * scale, row["y"] + pad_y + 0.5 * scale, 0)
+            blf.draw(font, rhk)
 
     gpu.state.blend_set("NONE")
 

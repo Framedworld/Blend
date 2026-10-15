@@ -189,8 +189,13 @@ def compute_poly_count_stats(context: Any = None) -> Dict[str, Any]:
             "quad_draw_dot_count": len(qd_state.get("dots", [])),
             "maya_shading_mode": shading_state.get("maya_mode", "6"),
             "maya_shading_label": shading_state.get("maya_label", "Shaded & Textured [6]"),
+            "renderer_engine": shading_state.get("renderer_engine", "BLENDER_EEVEE"),
+            "renderer_label": shading_state.get("renderer_label", "Viewport 2.0 (EEVEE)"),
             "wire_on_shaded": bool(shading_state.get("wire_on_shaded", True)),
             "xray": bool(shading_state.get("xray", False)),
+            "eevee_ssao": bool(shading_state.get("eevee_ssao", True)),
+            "eevee_shadows": bool(shading_state.get("eevee_shadows", True)),
+            "eevee_raytracing": bool(shading_state.get("eevee_raytracing", True)),
             "soft_select_enabled": bool(soft_state.get("enabled", False)),
             "soft_select_radius": float(soft_state.get("radius", 1.0)),
             "soft_select_falloff": str(soft_state.get("falloff_curve", "SMOOTH")),
@@ -323,8 +328,15 @@ def _draw_maya_hud_callback():
     maya_sh = str(stats.get("maya_shading_mode", "6"))
     wire_on = bool(stats.get("wire_on_shaded", True))
     xray_on = bool(stats.get("xray", False))
+    ssao_on = bool(stats.get("eevee_ssao", True))
+    shadows_on = bool(stats.get("eevee_shadows", True))
     soft_on = bool(stats.get("soft_select_enabled", False))
     soft_rad = float(stats.get("soft_select_radius", 1.0))
+
+    # Right-side Renderer badge ("Viewport 2.0 (EEVEE)  •  sRGB gamma")
+    rnd_label = str(stats.get("renderer_label") or "Viewport 2.0 (EEVEE)")
+    vp_badge = f"{rnd_label}  •  sRGB gamma"
+    vpw, _ = blf.dimensions(font_id, vp_badge)
 
     for b_txt, b_active, is_amber in (
         ("Wire [4]", maya_sh == "4", False),
@@ -332,12 +344,14 @@ def _draw_maya_hud_callback():
         ("Textured [6]", maya_sh == "6", False),
         ("All Lights [7]", maya_sh == "7", False),
         ("Wire on Shaded", wire_on, False),
+        ("SSAO", ssao_on and maya_sh in ("5", "6", "7"), False),
+        ("Shadows", shadows_on and maya_sh in ("6", "7"), False),
         ("X-Ray [Alt+Z]", xray_on, False),
         (f"Soft Select [B]: {soft_rad:.2f}m" if soft_on else "Soft Select [B]", soft_on, True),
     ):
         bw, _ = blf.dimensions(font_id, b_txt)
         pill_w = bw + 11.0
-        if menu_x + pill_w < rw - 145.0:
+        if menu_x + pill_w < rw - vpw - 26.0:
             if b_active and is_amber:
                 _draw_rect_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, (0.28, 0.19, 0.08, 0.94))
                 _draw_border_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, 1.0, (0.94, 0.66, 0.22, 0.92))
@@ -353,11 +367,8 @@ def _draw_maya_hud_callback():
             blf.draw(font_id, b_txt)
             menu_x += pill_w + 4.0
 
-    # Right-side Renderer badge ("Viewport 2.0  •  sRGB gamma")
-    vp_badge = "Viewport 2.0  •  sRGB gamma"
-    vpw, _ = blf.dimensions(font_id, vp_badge)
     if rw > 420.0:
-        blf.color(font_id, 0.49, 0.54, 0.60, 0.92)
+        blf.color(font_id, 0.52, 0.74, 0.88, 0.96)
         blf.position(font_id, rw - vpw - 12.0, strip_y + 8.0, 0)
         blf.draw(font_id, vp_badge)
 

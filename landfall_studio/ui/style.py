@@ -448,17 +448,23 @@ def apply_modern_maya_theme_to_blender(
                         pass
                     if hide_stock_view3d_toolbar and getattr(bpy.context, "window", None) is not None and hasattr(sp, "show_region_toolbar"):
                         ptr = int(sp.as_pointer())
-                        if not any(p == ptr for p, _, _ in _saved_region_flags):
+                        if not any(p[0] == ptr for p in _saved_region_flags):
                             _saved_region_flags.append(
                                 (
                                     ptr,
                                     bool(getattr(sp, "show_region_toolbar", True)),
                                     bool(getattr(sp, "show_region_ui", False)),
+                                    bool(getattr(sp, "show_region_header", True)),
+                                    bool(getattr(sp, "show_region_tool_header", True)),
                                 )
                             )
                         try:
                             if sp.show_region_toolbar:
                                 sp.show_region_toolbar = False
+                            if hasattr(sp, "show_region_header") and sp.show_region_header:
+                                sp.show_region_header = False
+                            if hasattr(sp, "show_region_tool_header") and sp.show_region_tool_header:
+                                sp.show_region_tool_header = False
                             hidden_toolbars += 1
                         except Exception:
                             pass
@@ -487,7 +493,12 @@ def restore_blender_theme(context: Any = None) -> Dict[str, Any]:
         import bpy
 
         if getattr(bpy.context, "window", None) is not None:
-            saved_map = {ptr: (tb, ui) for ptr, tb, ui in _saved_region_flags}
+            saved_map = {}
+            for item in _saved_region_flags:
+                if len(item) >= 5:
+                    saved_map[item[0]] = (item[1], item[2], item[3], item[4])
+                else:
+                    saved_map[item[0]] = (item[1], item[2], True, True)
             wm = getattr(bpy.context, "window_manager", None)
             for win in (wm.windows if wm else []):
                 if not win.screen:
@@ -496,9 +507,13 @@ def restore_blender_theme(context: Any = None) -> Dict[str, Any]:
                     if area.type == "VIEW_3D":
                         sp = area.spaces.active
                         if sp is not None and int(sp.as_pointer()) in saved_map:
-                            tb, _ = saved_map[int(sp.as_pointer())]
+                            tb, _ui, hdr, thdr = saved_map[int(sp.as_pointer())]
                             try:
                                 sp.show_region_toolbar = tb
+                                if hasattr(sp, "show_region_header"):
+                                    sp.show_region_header = hdr
+                                if hasattr(sp, "show_region_tool_header"):
+                                    sp.show_region_tool_header = thdr
                             except Exception:
                                 pass
     except Exception:
@@ -511,3 +526,65 @@ def restore_blender_theme(context: Any = None) -> Dict[str, Any]:
 
 def is_theme_applied() -> bool:
     return _theme_applied
+
+
+def get_design_system_tokens() -> Dict[str, Any]:
+    """Return the unified 3-layer Modern Maya Studio design system tokens (Blender Theme + GPU Overlays + Qt QSS)."""
+    return {
+        "palette": dict(MAYA_TOKENS),
+        "layers": {
+            "blender_theme": {
+                "view3d_gradient_high": "#333940",
+                "view3d_gradient_low": "#21262B",
+                "active_selection_emerald": "#43DE8A",
+                "component_selection_orange": "#F29E38",
+                "panel_surface": MAYA_TOKENS["bg_panel"],
+            },
+            "gpu_overlays": {
+                "strip_height_px": 26,
+                "card_bg_rgba": (0.082, 0.098, 0.114, 0.85),
+                "accent_teal_rgba": (0.22, 0.64, 0.85, 0.95),
+                "live_emerald_rgba": (0.24, 0.65, 0.44, 0.85),
+                "soft_select_amber_rgba": (0.94, 0.66, 0.22, 0.90),
+            },
+            "qt_docks": {
+                "top_shelf_height_px": 104,
+                "status_line_height_px": 32,
+                "tool_box_width_px": 42,
+                "right_edge_tab_strip_width_px": 26,
+                "time_slider_height_px": 84,
+            },
+        },
+    }
+
+
+def verify_three_layer_theme_sync(dpi_scale: float = 1.0) -> Dict[str, Any]:
+    """Audit unified visual tokens, shelf label lengths, and DPI scaling (`1.0x`, `1.25x`, `1.5x`)."""
+    from . import shelf
+
+    qss = get_studio_stylesheet()
+    scale = max(0.75, min(2.5, float(dpi_scale or 1.0)))
+    max_shelf_label_len = 0
+    clipped_labels: List[str] = []
+    for tab_name, items in shelf.SHELF_TABS.items():
+        for item in items:
+            lbl = str(item.get("label", ""))
+            max_shelf_label_len = max(max_shelf_label_len, len(lbl))
+            if len(lbl) > 10:
+                clipped_labels.append(f"{tab_name}:{lbl}")
+
+    return {
+        "ok": len(clipped_labels) == 0 and bool(qss) and len(MAYA_TOKENS) >= 25,
+        "dpi_scale": scale,
+        "scaled_metrics": {
+            "top_shelf_h": round(104.0 * scale, 1),
+            "viewport_strip_h": round(26.0 * scale, 1),
+            "channel_row_h": round(21.0 * scale, 1),
+            "marking_menu_row_h": round(24.0 * scale, 1),
+        },
+        "theme_applied": _theme_applied,
+        "saved_theme_attr_count": len(_saved_theme_attrs),
+        "qss_length": len(qss),
+        "max_shelf_label_len": max_shelf_label_len,
+        "clipped_shelf_labels": clipped_labels,
+    }

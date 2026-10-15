@@ -36,7 +36,7 @@ from .bootstrap import deps, paths
 bl_info = {
     "name": "Landfall Studio",
     "author": "Framedworld",
-    "version": (0, 9, 0),
+    "version": (1, 0, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar (N) > Landfall | Preferences > Add-ons > Landfall Studio",
     "description": "Unified Maya-oriented Blender environment (Landfall + Tentacle + blendertk)",
