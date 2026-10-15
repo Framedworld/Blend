@@ -71,12 +71,16 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
         {"id": "wire_on_shaded", "label": "Wire/Shaded", "icon": "wire_on_shaded", "tool_ctx": "DISPLAY", "tip": "Toggle Wireframe on Shaded"},
     ],
     "Deform & Rigging": [
+        {"id": "shape_editor", "label": "Shape Ed", "icon": "blendshape", "tool_ctx": "RIGGING", "tip": "Open Maya Shape Editor & Skin Weights Dock"},
+        {"id": "blendshape_anim", "label": "Correctives", "icon": "blendshape", "tool_ctx": "RIGGING", "tip": "Open BlendshapeAnimator Corrective In-Betweens UI"},
+        {"id": "extract_target", "label": "Extract Tgt", "icon": "extract_target", "tool_ctx": "RIGGING", "tip": "Extract Active Shape Target Mesh (Hold Reference)"},
+        {"id": "sync_target", "label": "Sync Tgt", "icon": "extract_target", "tool_ctx": "RIGGING", "tip": "Sync Extracted Target Back to Shape Key (Strict Topology)"},
+        {"id": "weight_hammer", "label": "Wt Hammer", "icon": "weight_hammer", "tool_ctx": "RIGGING", "tip": "Maya Weight Hammer (Respects Locked Influences)"},
+        {"id": "mirror_weights", "label": "Mirror Wts", "icon": "mirror_weights", "tool_ctx": "RIGGING", "tip": "Mirror Skin Weights Across X Axis (Respects Locks)"},
+        {"id": "skin_transfer", "label": "Copy Skin", "icon": "skin_transfer", "tool_ctx": "RIGGING", "tip": "Controlled Skin Weight Transfer (Preserve Locked Weights)"},
         {"id": "joint_tool", "label": "Create Joint", "icon": "joint_tool", "tool_ctx": "RIGGING", "tip": "Create Armature / Joint"},
-        {"id": "bevel", "label": "Bevel Mod", "icon": "bevel", "tool_ctx": "BEVEL", "tip": "Add Bevel Input Node"},
-        {"id": "extrude", "label": "Solidify", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Add Solidify Input Node"},
-        {"id": "freeze_transforms", "label": "Freeze", "icon": "freeze_transforms", "tool_ctx": "FREEZE", "tip": "Freeze Transformations"},
         {"id": "non_def_history", "label": "Non-Def", "icon": "non_def_history", "tool_ctx": "HISTORY", "tip": "Delete Non-Deformer History (Preserves Rig/ShapeKeys)"},
-        {"id": "delete_history", "label": "Bake Hist", "icon": "delete_history", "tool_ctx": "HISTORY", "tip": "Delete Construction History"},
+        {"id": "freeze_transforms", "label": "Freeze", "icon": "freeze_transforms", "tool_ctx": "FREEZE", "tip": "Freeze Transformations"},
     ],
     "Pipeline": [
         {"id": "workspace_ed", "label": "Workspace", "icon": "workspace_ed", "tool_ctx": "PIPELINE", "tip": "Open Project Workspace Editor (workspace.mel)"},
@@ -91,10 +95,59 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
 def execute_shelf_item(item_id: str) -> Dict[str, Any]:
     """Execute a Maya Shelf button command by `item_id` and record in command feedback."""
     import bpy
-    from .. import modeling
-    from . import desktop, modeling_toolkit
+    from .. import character, modeling
+    from . import desktop, modeling_toolkit, shape_editor
 
     iid = (item_id or "").strip().lower()
+    if iid == "shape_editor":
+        res = desktop.cycle_right_dock("SHAPE_EDITOR")
+        desktop.set_command_feedback("ShapeEditor", "Shape / Skin Dock Open")
+        return {"ok": True, "item_id": iid, "result": res}
+
+    if iid == "blendshape_anim":
+        res = desktop.open_panel("blendshape_animator", docked=False)
+        desktop.set_command_feedback("BlendshapeAnimator", "Opened")
+        return {"ok": res.get("ok", True), "item_id": iid, "result": res}
+
+    if iid == "extract_target":
+        snap = shape_editor.get_shape_editor_snapshot()
+        targets = snap.get("shape_targets", [])
+        tname = targets[0]["name"] if targets else "Target1"
+        if not targets:
+            character.create_shape_target(target_name=tname, weight=1.0)
+        res = character.extract_target_mesh_with_reference(target_name=tname)
+        shape_editor.refresh_shape_editor_widgets()
+        desktop.set_command_feedback("ExtractShapeTarget", res.get("extracted_object", tname))
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
+
+    if iid == "sync_target":
+        res = character.sync_extracted_target_to_shape_key()
+        shape_editor.refresh_shape_editor_widgets()
+        desktop.set_command_feedback("SyncShapeTarget", res.get("target_name", "Synced"))
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
+
+    if iid == "weight_hammer":
+        res = character.weight_hammer_vertices()
+        shape_editor.refresh_shape_editor_widgets()
+        desktop.set_command_feedback("weightHammerVerts", f"verts={res.get('hammered_vertex_count', 0)}")
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
+
+    if iid == "mirror_weights":
+        res = character.mirror_skin_weights(direction="POSITIVE_TO_NEGATIVE")
+        shape_editor.refresh_shape_editor_widgets()
+        desktop.set_command_feedback("copySkinWeights -mirror", f"verts={res.get('mirrored_vertex_count', 0)}")
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
+
+    if iid == "skin_transfer":
+        sel = [o for o in getattr(bpy.context, "selected_objects", ()) if o.type == "MESH"]
+        active = getattr(bpy.context.view_layer.objects, "active", None)
+        others = [o for o in sel if o != active]
+        src = others[0] if others else active
+        res = character.controlled_weight_transfer(source_obj=src, target_obj=active, method="CLOSEST_SURFACE")
+        shape_editor.refresh_shape_editor_widgets()
+        desktop.set_command_feedback("copySkinWeights", f"transferred={res.get('transferred_vertex_count', 0)}")
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
+
     if iid in ("poly_cube", "poly_sphere", "poly_cylinder", "poly_plane"):
         ptype = iid.replace("poly_", "").upper()
         opts = tool_settings.get_tool_settings_snapshot()["option_box"]
@@ -442,6 +495,7 @@ class MayaShelfWidget:
             ("Outliner", "OUTLINER", "Toggle Left DAG Outliner"),
             ("Ch Box", "CHANNEL_BOX", "Show Channel Box / Layer Editor (Ctrl+A)"),
             ("Mod Toolkit", "MODELING_TOOLKIT", "Show Maya Modeling Toolkit"),
+            ("Shape / Skin", "SHAPE_EDITOR", "Show Maya Shape Editor & Skin Weights"),
             ("Tool Set", "TOOL_SETTINGS", "Show Tool Settings (□)"),
             ("Attr Ed", "ATTRIBUTE_EDITOR", "Show Attribute Editor (Ctrl+A)"),
         ):

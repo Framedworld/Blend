@@ -538,6 +538,69 @@ def render_pixmap(name: str, size: int = 24):
         p.drawLine(QtCore.QPointF(7.5, 10.5), QtCore.QPointF(10, 13))
         p.drawLine(QtCore.QPointF(10, 13), QtCore.QPointF(14, 8))
 
+    elif key == "blendshape":
+        # Maya Shape Editor / BlendShape icon: neutral silhouette + cyan morphed curve + slider dot
+        p.setPen(QtGui.QPen(c_slate, 1.3, QtCore.Qt.DashLine))
+        p.setBrush(QtGui.QColor("#343B46"))
+        p.drawEllipse(QtCore.QRectF(3.5, 4.5, 11, 13))
+        p.setPen(pen_teal)
+        p.setBrush(c_teal_fill)
+        p.drawEllipse(QtCore.QRectF(8.5, 3.5, 12, 14))
+        p.setPen(QtGui.QPen(c_amber, 1.8))
+        p.drawLine(QtCore.QPointF(4, 20.5), QtCore.QPointF(20, 20.5))
+        p.setBrush(c_amber)
+        p.setPen(pen_dark)
+        p.drawEllipse(QtCore.QPointF(15, 20.5), 2.5, 2.5)
+
+    elif key == "weight_hammer":
+        # Maya Weight Hammer icon: metallic hammer head + handle + glowing cyan vertex
+        p.setPen(QtGui.QPen(c_amber, 2.2, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
+        p.drawLine(QtCore.QPointF(7, 17), QtCore.QPointF(15, 9))
+        head = QtGui.QPolygonF([QtCore.QPointF(11, 5), QtCore.QPointF(19, 5), QtCore.QPointF(19, 10), QtCore.QPointF(13, 10)])
+        p.setPen(pen_light)
+        p.setBrush(QtGui.QColor("#626E80"))
+        p.drawPolygon(head)
+        p.setBrush(c_teal)
+        p.setPen(pen_dark)
+        p.drawEllipse(QtCore.QPointF(6, 18.5), 3.0, 3.0)
+
+    elif key == "mirror_weights":
+        # Symmetry axis + mirrored bone/weight triangles
+        p.setPen(QtGui.QPen(c_amber, 1.5, QtCore.Qt.DashLine))
+        p.drawLine(QtCore.QPointF(12, 2.5), QtCore.QPointF(12, 21.5))
+        left_tri = QtGui.QPolygonF([QtCore.QPointF(10, 6), QtCore.QPointF(3.5, 12), QtCore.QPointF(10, 18)])
+        right_tri = QtGui.QPolygonF([QtCore.QPointF(14, 6), QtCore.QPointF(20.5, 12), QtCore.QPointF(14, 18)])
+        p.setPen(pen_light)
+        p.setBrush(QtGui.QColor("#485260"))
+        p.drawPolygon(left_tri)
+        p.setPen(pen_teal)
+        p.setBrush(c_teal_fill)
+        p.drawPolygon(right_tri)
+
+    elif key == "extract_target":
+        # Base mesh + extracted target mesh with link arrow
+        p.setPen(QtGui.QPen(c_slate, 1.2))
+        p.setBrush(QtGui.QColor("#38404C"))
+        p.drawRect(QtCore.QRectF(3, 8, 9, 11))
+        p.setPen(QtGui.QPen(c_green, 1.5))
+        p.setBrush(QtGui.QColor(89, 184, 110, 110))
+        p.drawRect(QtCore.QRectF(12, 4, 9, 11))
+        p.setPen(QtGui.QPen(c_amber, 1.8))
+        p.drawLine(QtCore.QPointF(7.5, 8), QtCore.QPointF(15.5, 8))
+
+    elif key == "skin_transfer":
+        # Source cage -> Target surface weight transfer
+        p.setPen(pen_amber)
+        p.setBrush(c_amber_fill)
+        p.drawEllipse(QtCore.QRectF(3, 5, 8, 14))
+        p.setPen(pen_teal)
+        p.setBrush(c_teal_fill)
+        p.drawEllipse(QtCore.QRectF(13, 5, 8, 14))
+        p.setPen(QtGui.QPen(c_light, 1.8))
+        p.drawLine(QtCore.QPointF(9, 12), QtCore.QPointF(15, 12))
+        p.drawLine(QtCore.QPointF(15, 12), QtCore.QPointF(12.5, 9.5))
+        p.drawLine(QtCore.QPointF(15, 12), QtCore.QPointF(12.5, 14.5))
+
     else:
         # Clean fallback geometric diamond badge
         poly = QtGui.QPolygonF([QtCore.QPointF(12, 4), QtCore.QPointF(20, 12), QtCore.QPointF(12, 20), QtCore.QPointF(4, 12)])

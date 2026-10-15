@@ -1,4 +1,4 @@
-"""Unified Qt Window Desktop, Modern Maya Studio Shell, Channel Box, Attribute Editor, Tool Settings, and DAG Outliner package for Landfall Studio (Phase 04)."""
+"""Unified Qt Window Desktop, Modern Maya Studio Shell, Channel Box, Attribute Editor, Tool Settings, Shape Editor, Time Slider, and DAG Outliner package for Landfall Studio (Phase 06)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ from . import (
     icons,
     modeling_toolkit,
     outliner,
+    shape_editor,
     shelf,
     style,
+    time_slider,
     tool_settings,
 )
 from .attribute_editor import (
@@ -46,6 +48,7 @@ from .desktop import (
     cycle_right_dock,
     dock_left_outliner,
     dock_panel,
+    dock_time_slider,
     dock_top_shelf,
     ensure_selection_and_value_sync,
     ensure_ui_handler,
@@ -92,11 +95,20 @@ from .outliner import (
     reparent_preserve_world,
     select_in_outliner,
 )
+from .shape_editor import (
+    get_shape_editor_snapshot,
+    refresh_shape_editor_widgets,
+)
 from .shelf import (
     SHELF_TABS,
     execute_shelf_item,
     open_tool_settings_for_shelf_item,
     refresh_top_shelf_status,
+)
+from .time_slider import (
+    get_bottom_time_slider_dock,
+    get_time_slider_snapshot,
+    refresh_time_slider_widgets,
 )
 from .tool_settings import (
     apply_current_tool_option_box,
@@ -127,6 +139,7 @@ __all__ = [
     "dispatch_qt_key_to_blender",
     "dock_left_outliner",
     "dock_panel",
+    "dock_time_slider",
     "dock_top_shelf",
     "ensure_selection_and_value_sync",
     "ensure_ui_handler",
@@ -134,6 +147,7 @@ __all__ = [
     "execute_shelf_item",
     "focus_panel",
     "get_attribute_editor_snapshot",
+    "get_bottom_time_slider_dock",
     "get_channels_snapshot",
     "get_command_feedback",
     "get_dag_outliner_snapshot",
@@ -147,6 +161,8 @@ __all__ = [
     "get_passthrough_history",
     "get_registry_state",
     "get_selected_channel_names",
+    "get_shape_editor_snapshot",
+    "get_time_slider_snapshot",
     "get_tool_settings_snapshot",
     "icons",
     "install_hotkey_filter",
@@ -160,6 +176,8 @@ __all__ = [
     "open_tool_settings_for_shelf_item",
     "outliner",
     "refresh_modeling_toolkit_widgets",
+    "refresh_shape_editor_widgets",
+    "refresh_time_slider_widgets",
     "refresh_top_shelf_status",
     "register",
     "rename_object_shape",
@@ -178,11 +196,13 @@ __all__ = [
     "set_object_input_attribute",
     "set_project_root_and_sync",
     "set_tool_setting",
+    "shape_editor",
     "shelf",
     "style",
     "sync_all_display_layers_from_scene",
     "sync_channels_now",
     "sync_project_root_to_panels",
+    "time_slider",
     "toggle_left_outliner_dock",
     "tool_settings",
     "undock_panel",

@@ -13,11 +13,18 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from . import attribute_editor, channel_box_ext, modeling_toolkit, style, tool_settings
+from . import (
+    attribute_editor,
+    channel_box_ext,
+    modeling_toolkit,
+    shape_editor,
+    style,
+    tool_settings,
+)
 
 
 class _RightSidebarHostWidget:
-    """Frameless Qt container holding the Maya right-sidebar tab strip + `QStackedWidget` (`Channel Box`, `Modeling Toolkit`, `Attribute Editor`, `Tool Settings`)."""
+    """Frameless Qt container holding the Maya right-sidebar tab strip + `QStackedWidget` (`Channel Box`, `Modeling Toolkit`, `Shape / Skin`, `Attribute Editor`, `Tool Settings`)."""
 
     def __init__(self, on_mode_tab_clicked: Callable[[str], None]):
         from qtpy import QtCore, QtWidgets
@@ -31,35 +38,41 @@ class _RightSidebarHostWidget:
         vlay.setContentsMargins(0, 0, 0, 0)
         vlay.setSpacing(0)
 
-        # Top Maya Sidebar Tab Bar (Ch Box / Layers | Modeling Toolkit | Attribute Editor | Tool Settings)
+        # Top Maya Sidebar Tab Bar (Ch Box | Mod Toolkit | Shape / Skin | Attr Editor | Tool Settings)
         tab_strip = QtWidgets.QFrame()
         tab_strip.setObjectName("MayaStatusLine")
         tlay = QtWidgets.QHBoxLayout(tab_strip)
-        tlay.setContentsMargins(3, 3, 3, 2)
+        tlay.setContentsMargins(2, 3, 2, 2)
         tlay.setSpacing(2)
 
-        self.btn_cb = QtWidgets.QPushButton("Ch Box / Layers")
+        self.btn_cb = QtWidgets.QPushButton("Ch Box")
         self.btn_cb.setCheckable(True)
         self.btn_cb.setFixedHeight(22)
         self.btn_cb.clicked.connect(lambda: self._on_mode_tab_clicked("CHANNEL_BOX"))
 
-        self.btn_mtk = QtWidgets.QPushButton("Modeling Toolkit")
+        self.btn_mtk = QtWidgets.QPushButton("Mod Toolkit")
         self.btn_mtk.setCheckable(True)
         self.btn_mtk.setFixedHeight(22)
         self.btn_mtk.clicked.connect(lambda: self._on_mode_tab_clicked("MODELING_TOOLKIT"))
 
-        self.btn_ae = QtWidgets.QPushButton("Attr Editor")
+        self.btn_se = QtWidgets.QPushButton("Shape / Skin")
+        self.btn_se.setCheckable(True)
+        self.btn_se.setFixedHeight(22)
+        self.btn_se.clicked.connect(lambda: self._on_mode_tab_clicked("SHAPE_EDITOR"))
+
+        self.btn_ae = QtWidgets.QPushButton("Attr Ed")
         self.btn_ae.setCheckable(True)
         self.btn_ae.setFixedHeight(22)
         self.btn_ae.clicked.connect(lambda: self._on_mode_tab_clicked("ATTRIBUTE_EDITOR"))
 
-        self.btn_ts = QtWidgets.QPushButton("Tool Settings")
+        self.btn_ts = QtWidgets.QPushButton("Tool Set")
         self.btn_ts.setCheckable(True)
         self.btn_ts.setFixedHeight(22)
         self.btn_ts.clicked.connect(lambda: self._on_mode_tab_clicked("TOOL_SETTINGS"))
 
         tlay.addWidget(self.btn_cb, 1)
         tlay.addWidget(self.btn_mtk, 1)
+        tlay.addWidget(self.btn_se, 1)
         tlay.addWidget(self.btn_ae, 1)
         tlay.addWidget(self.btn_ts, 1)
         vlay.addWidget(tab_strip)
@@ -81,6 +94,9 @@ class _RightSidebarHostWidget:
 
         self.mtk_widget = modeling_toolkit.create_modeling_toolkit_widget()
         self.stack.addWidget(self.mtk_widget)
+
+        self.se_widget = shape_editor.create_shape_editor_widget()
+        self.stack.addWidget(self.se_widget)
 
         self._attached_channels = None
 
@@ -111,6 +127,7 @@ class _RightSidebarHostWidget:
         m = (mode or "CHANNEL_BOX").upper()
         self.btn_cb.setChecked(m == "CHANNEL_BOX")
         self.btn_mtk.setChecked(m == "MODELING_TOOLKIT")
+        self.btn_se.setChecked(m == "SHAPE_EDITOR")
         self.btn_ae.setChecked(m == "ATTRIBUTE_EDITOR")
         self.btn_ts.setChecked(m == "TOOL_SETTINGS")
 
@@ -126,6 +143,10 @@ class _RightSidebarHostWidget:
             if self.mtk_widget is not None:
                 self.mtk_widget.refresh_from_scene()
             self.stack.setCurrentIndex(3)
+        elif m == "SHAPE_EDITOR":
+            if self.se_widget is not None:
+                self.se_widget.refresh_from_scene()
+            self.stack.setCurrentIndex(4)
         else:
             if self._attached_channels is not None:
                 self._attached_channels.show()
@@ -134,7 +155,7 @@ class _RightSidebarHostWidget:
 
 
 class RightAreaQtDock:
-    """Right-column `WS_CHILD` dock manager supporting `Channel Box`, `Modeling Toolkit`, `Attribute Editor`, `Tool Settings`, and `Native Properties`."""
+    """Right-column `WS_CHILD` dock manager supporting `Channel Box`, `Modeling Toolkit`, `Shape / Skin`, `Attribute Editor`, `Tool Settings`, and `Native Properties`."""
 
     DEFAULT_WIDTH = 340
 
@@ -172,7 +193,7 @@ class RightAreaQtDock:
     def is_qt_embedded(self) -> bool:
         return bool(
             self._inner_dock.docked
-            and self._mode in ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS")
+            and self._mode in ("CHANNEL_BOX", "MODELING_TOOLKIT", "SHAPE_EDITOR", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS")
         )
 
     @property
@@ -207,7 +228,7 @@ class RightAreaQtDock:
 
     def _handle_inner_detach(self) -> None:
         self._created_split_area = False
-        if self._mode in ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS"):
+        if self._mode in ("CHANNEL_BOX", "MODELING_TOOLKIT", "SHAPE_EDITOR", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS"):
             self._mode = "HIDDEN"
         if self._user_on_detach is not None:
             try:
@@ -375,6 +396,13 @@ class RightAreaQtDock:
         modeling_toolkit.refresh_modeling_toolkit_widgets()
         return self._dock_host_in_right_area(
             self._channels_widget, target_mode="MODELING_TOOLKIT"
+        )
+
+    def show_shape_editor(self) -> bool:
+        """Show the Maya Qt `Shape Editor & Skin Weights` tab in the right dock."""
+        shape_editor.refresh_shape_editor_widgets()
+        return self._dock_host_in_right_area(
+            self._channels_widget, target_mode="SHAPE_EDITOR"
         )
 
     def show_native_properties(self, properties_context: str = "OBJECT") -> bool:

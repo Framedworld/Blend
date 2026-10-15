@@ -18,14 +18,14 @@ try:
 except ImportError:  # Allow standalone Python CLI tools to import landfall_studio.bootstrap
     bpy = None
 
-from . import commands, diagnostics, keymaps, modeling, ui, viewport
+from . import character, commands, diagnostics, keymaps, modeling, ui, viewport
 from .adapters import blendertk_bridge, landfall_bridge, tentacle_bridge, workspace_bridge
 from .bootstrap import deps, paths
 
 bl_info = {
     "name": "Landfall Studio",
     "author": "Framedworld",
-    "version": (0, 5, 0),
+    "version": (0, 6, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar (N) > Landfall | Preferences > Add-ons > Landfall Studio",
     "description": "Unified Maya-oriented Blender environment (Landfall + Tentacle + blendertk)",
@@ -222,6 +222,7 @@ if bpy is not None:
         + keymaps.KEYMAP_CLASSES
         + ui.UI_CLASSES
         + modeling.MODELING_CLASSES
+        + character.CHARACTER_CLASSES
     )
 else:
     STUDIO_CLASSES = ()
@@ -234,7 +235,7 @@ def _draw_studio_preferences(prefs_self, context):
     layout = prefs_self.layout
     box = layout.box()
     box.label(
-        text="Landfall Studio — Unified Maya Environment (Phase 04)",
+        text="Landfall Studio — Unified Maya Environment (Phase 06)",
         icon="PREFERENCES",
     )
 
@@ -314,11 +315,12 @@ def register():
     # 1. Pre-flight check of paths and dependencies (never triggers pip install)
     dep_status = deps.check_dependencies()
 
-    # 2. Register Studio operators (bootstrap, viewport interaction, marking menus, keymap profile, Qt UI desktop)
+    # 2. Register Studio operators (bootstrap, viewport interaction, marking menus, keymap profile, Qt UI desktop, character)
     for cls in STUDIO_CLASSES:
         bpy.utils.register_class(cls)
     viewport.register_marking_menu_handlers()
     viewport.register_hud_handler()
+    character.register_handlers()
 
     # 3. Register pinned upstream Landfall (theme, finite grid, smooth cage, border edges, gizmos, navigation)
     landfall_bridge.register(
@@ -382,10 +384,11 @@ def unregister():
     except Exception as exc:
         print(f"[landfall_studio] ui unregister warning: {exc}")
 
-    # 3. Stop any open Studio marking menu & HUD draw handlers and clear command & modeling state
+    # 3. Stop any open Studio marking menu & HUD draw handlers and clear command, modeling, and character state
     try:
         viewport.unregister_hud_handler()
         viewport.unregister_marking_menu_handlers()
+        character.unregister_handlers()
         modeling.clear_modeling_state()
         commands.clear_state()
     except Exception as exc:

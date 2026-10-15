@@ -28,8 +28,10 @@ from . import (
     hotkey_passthrough,
     modeling_toolkit,
     outliner,
+    shape_editor,
     shelf,
     style,
+    time_slider,
     tool_settings,
 )
 from .right_dock import RightAreaQtDock
@@ -39,6 +41,7 @@ CANONICAL_PANELS = (
     "reference_manager",
     "workspace_editor",
     "script_output",
+    "blendshape_animator",
 )
 
 _DESKTOP_SYNC_OWNER = object()
@@ -135,6 +138,14 @@ def dock_left_outliner() -> Dict[str, Any]:
     ok = ldock.dock_outliner()
     _ensure_qt_events_flushed()
     return {"ok": True, "docked": bool(ok), "widget": ldock.widget is not None}
+
+
+def dock_time_slider() -> Dict[str, Any]:
+    ensure_ui_handler()
+    ts_dock = time_slider.get_bottom_time_slider_dock()
+    ok = ts_dock.dock_time_slider()
+    _ensure_qt_events_flushed()
+    return {"ok": True, "docked": bool(ok), "widget": ts_dock.widget is not None}
 
 
 def toggle_left_outliner_dock() -> Dict[str, Any]:
@@ -562,7 +573,7 @@ def restore_panel(panel_id: str) -> Dict[str, Any]:
 
 
 def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
-    """Cycle the right-hand dock (`Ctrl+A` in Maya) between `CHANNEL_BOX`, `ATTRIBUTE_EDITOR`, `TOOL_SETTINGS`, `NATIVE_PROPERTIES`, or `HIDDEN`."""
+    """Cycle the right-hand dock (`Ctrl+A` in Maya) between `CHANNEL_BOX`, `MODELING_TOOLKIT`, `SHAPE_EDITOR`, `ATTRIBUTE_EDITOR`, `TOOL_SETTINGS`, `NATIVE_PROPERTIES`, or `HIDDEN`."""
     rdock = _get_right_dock()
     widget, slots = get_panel_widget_and_slots("channels")
     if widget is None:
@@ -577,7 +588,7 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
         order = ("CHANNEL_BOX", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "HIDDEN")
         idx = (order.index(cur) + 1) % len(order) if cur in order else 0
         next_mode = order[idx]
-    elif req in ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "NATIVE_PROPERTIES", "HIDDEN"):
+    elif req in ("CHANNEL_BOX", "MODELING_TOOLKIT", "SHAPE_EDITOR", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "NATIVE_PROPERTIES", "HIDDEN"):
         next_mode = req
     else:
         next_mode = "CHANNEL_BOX"
@@ -587,6 +598,8 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
         sync_channels_now()
     elif next_mode == "MODELING_TOOLKIT":
         rdock.show_modeling_toolkit()
+    elif next_mode == "SHAPE_EDITOR":
+        rdock.show_shape_editor()
     elif next_mode == "ATTRIBUTE_EDITOR":
         rdock.show_attribute_editor(properties_context="OBJECT")
         attribute_editor.refresh_attribute_editor()
@@ -685,6 +698,7 @@ def get_registry_state() -> Dict[str, Any]:
     rdock_qt_embedded = bool(_right_dock.is_qt_embedded) if _right_dock is not None else False
     top_shelf_docked = bool(_top_shelf_dock.docked) if _top_shelf_dock is not None else False
     left_outliner_docked = bool(outliner.get_left_outliner_dock().docked) if _registered else False
+    time_slider_docked = bool(time_slider.get_bottom_time_slider_dock().docked) if _registered else False
 
     return {
         "registered": _registered,
@@ -701,6 +715,8 @@ def get_registry_state() -> Dict[str, Any]:
         "top_shelf_embedded": top_shelf_docked,
         "left_outliner_docked": left_outliner_docked,
         "left_outliner_embedded": left_outliner_docked,
+        "time_slider_docked": time_slider_docked,
+        "time_slider_embedded": time_slider_docked,
         "hotkey_filter_installed": hotkey_passthrough.is_filter_installed(),
         "project_root": workspace_bridge.get_project_root(),
         "command_feedback": get_command_feedback(),
@@ -714,14 +730,17 @@ def get_registry_state() -> Dict[str, Any]:
 # --------------------------------------------------------------------------------------
 
 def _compute_selection_value_sig() -> Tuple[Any, ...]:
-    """Compute a fast immutable signature of the current selection's names, transforms, locks, modifiers, and custom props."""
+    """Compute a fast immutable signature of the current selection's names, transforms, locks, modifiers, shape keys, and frame."""
     try:
+        import bpy
         from blendertk.core_utils._core_utils import CoreUtils
 
+        scene = getattr(bpy.context, "scene", None)
+        cur_frame = int(scene.frame_current) if scene is not None else 1
         objs = list(CoreUtils.selected_objects())
         active = CoreUtils.active_object()
         active_name = active.name if active is not None else ""
-        parts: List[Any] = [active_name]
+        parts: List[Any] = [active_name, cur_frame]
         for o in objs[:8]:
             try:
                 loc = tuple(round(float(v), 5) for v in o.location)
@@ -738,9 +757,19 @@ def _compute_selection_value_sig() -> Tuple[Any, ...]:
                     if not k.startswith("btk_")
                 )
                 mods = tuple((m.name, m.type) for m in getattr(o, "modifiers", ()))
+                skeys = ()
+                if getattr(o, "type", None) == "MESH" and getattr(o.data, "shape_keys", None) is not None:
+                    skeys = tuple(
+                        (kb.name, round(float(kb.value), 4), bool(kb.mute))
+                        for kb in o.data.shape_keys.key_blocks
+                    )
+                vgroups = tuple(
+                    (vg.name, bool(getattr(vg, "lock_weight", False)))
+                    for vg in getattr(o, "vertex_groups", ())
+                )
                 parent_name = o.parent.name if o.parent is not None else ""
                 shape_name = o.data.name if o.data is not None else ""
-                parts.append((o.name, parent_name, shape_name, loc, rot, scl, lk, mods, cprops))
+                parts.append((o.name, parent_name, shape_name, loc, rot, scl, lk, mods, skeys, vgroups, cprops))
             except Exception:
                 continue
         return tuple(parts)
@@ -749,7 +778,7 @@ def _compute_selection_value_sig() -> Tuple[Any, ...]:
 
 
 def _on_live_scene_or_depsgraph_update(*_args) -> None:
-    """Refresh `Channels`, `SHAPES/INPUTS`, `Display Layers`, `Modeling Toolkit`, `Attribute Editor`, `Tool Settings`, and `Outliner`."""
+    """Refresh `Channels`, `SHAPES/INPUTS`, `Display Layers`, `Modeling Toolkit`, `Shape Editor`, `Time Slider`, `Attribute Editor`, `Tool Settings`, and `Outliner`."""
     global _last_selection_value_sig
     sig = _compute_selection_value_sig()
     if sig == _last_selection_value_sig:
@@ -758,6 +787,8 @@ def _on_live_scene_or_depsgraph_update(*_args) -> None:
     sync_channels_now()
     channel_box_ext.refresh_channel_box_extensions()
     modeling_toolkit.refresh_modeling_toolkit_widgets()
+    shape_editor.refresh_shape_editor_widgets()
+    time_slider.refresh_time_slider_widgets()
     shelf.refresh_top_shelf_status()
     attribute_editor.refresh_attribute_editor()
     tool_settings.refresh_tool_settings_widget()
@@ -1092,6 +1123,7 @@ def restore_workspace_desktop(
     restore_script_output: bool = False,
     dock_shelf: bool = True,
     dock_outliner: bool = True,
+    dock_time_slider_bar: bool = True,
     apply_theme: bool = True,
 ) -> Dict[str, Any]:
     """Idempotently restore the Modern Maya Studio desktop layout without creating duplicate Blender areas."""
@@ -1117,6 +1149,9 @@ def restore_workspace_desktop(
     if dock_channels:
         dock_panel("channels")
 
+    if dock_time_slider_bar:
+        dock_time_slider()
+
     if restore_script_output:
         open_panel("script_output", docked=True)
 
@@ -1131,6 +1166,7 @@ def restore_workspace_desktop(
         "right_dock_mode": _right_dock.mode if _right_dock is not None else "HIDDEN",
         "top_shelf_docked": bool(_top_shelf_dock.docked) if _top_shelf_dock is not None else False,
         "left_outliner_docked": bool(outliner.get_left_outliner_dock().docked),
+        "time_slider_docked": bool(time_slider.get_bottom_time_slider_dock().docked),
         "hotkey_filter_installed": hotkey_passthrough.is_filter_installed(),
     }
 
@@ -1254,6 +1290,11 @@ def unregister() -> None:
     except Exception:
         pass
 
+    try:
+        time_slider.teardown_time_slider()
+    except Exception:
+        pass
+
     if _right_dock is not None:
         try:
             _right_dock.teardown()
@@ -1340,6 +1381,7 @@ if bpy is not None:
                 ("CYCLE_3", "Cycle 3-Way (Channel Box -> Attribute Editor -> Tool Settings -> Hidden)", "Cycle all right-sidebar modes"),
                 ("CHANNEL_BOX", "Channel Box", "Show the docked Qt Channel Box"),
                 ("MODELING_TOOLKIT", "Modeling Toolkit", "Show the Maya Modeling Toolkit"),
+                ("SHAPE_EDITOR", "Shape / Skin Editor", "Show the Maya Shape Editor & Skin Weights dock"),
                 ("ATTRIBUTE_EDITOR", "Attribute Editor", "Show the Maya Attribute Editor"),
                 ("TOOL_SETTINGS", "Tool Settings", "Show the Maya Tool Settings & Option Box inspector"),
                 ("NATIVE_PROPERTIES", "Native Properties", "Show native Blender Properties editor"),
