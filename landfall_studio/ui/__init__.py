@@ -1,10 +1,11 @@
-"""Unified Qt Window Desktop, Modern Maya Studio Shell, Channel Box, Attribute Editor, Tool Settings, Shape Editor, Time Slider, and DAG Outliner package for Landfall Studio (Phase 06)."""
+"""Unified Qt Window Desktop, Modern Maya Studio Shell, Channel Box, Hypershade, Attribute Editor, Tool Settings, Shape Editor, Time Slider, and DAG Outliner package for Landfall Studio (Phase 08)."""
 
 from __future__ import annotations
 
 from . import (
     attribute_editor,
     channel_box_ext,
+    hypershade_panel,
     icons,
     interchange_panel,
     modeling_toolkit,
@@ -14,6 +15,11 @@ from . import (
     style,
     time_slider,
     tool_settings,
+)
+from .hypershade_panel import (
+    create_hypershade_widget,
+    get_hypershade_ui_snapshot,
+    refresh_hypershade_widgets,
 )
 from .interchange_panel import (
     create_interchange_widget,
@@ -138,6 +144,7 @@ __all__ = [
     "clear_passthrough_history",
     "close_panel",
     "create_display_layer",
+    "create_hypershade_widget",
     "create_interchange_widget",
     "create_maya_primitive",
     "cycle_right_dock",
@@ -159,6 +166,7 @@ __all__ = [
     "get_command_feedback",
     "get_dag_outliner_snapshot",
     "get_hotkey_filter",
+    "get_hypershade_ui_snapshot",
     "get_interchange_ui_snapshot",
     "get_last_passthrough_event",
     "get_left_outliner_dock",
@@ -172,6 +180,7 @@ __all__ = [
     "get_shape_editor_snapshot",
     "get_time_slider_snapshot",
     "get_tool_settings_snapshot",
+    "hypershade_panel",
     "icons",
     "install_hotkey_filter",
     "interchange_panel",
@@ -184,6 +193,7 @@ __all__ = [
     "open_panel",
     "open_tool_settings_for_shelf_item",
     "outliner",
+    "refresh_hypershade_widgets",
     "refresh_interchange_widgets",
     "refresh_modeling_toolkit_widgets",
     "refresh_shape_editor_widgets",

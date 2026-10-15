@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional
 from . import (
     attribute_editor,
     channel_box_ext,
+    hypershade_panel,
     interchange_panel,
     modeling_toolkit,
     shape_editor,
@@ -122,12 +123,13 @@ class _RightSidebarHostWidget:
 
         self.edge_tabs = {}
         for label, mkey, h_px in (
-            ("CHANNEL BOX", "CHANNEL_BOX", 108),
-            ("MODELING TOOLKIT", "MODELING_TOOLKIT", 122),
-            ("SHAPE EDITOR", "SHAPE_EDITOR", 104),
-            ("MAYA BRIDGE", "MAYA_INTERCHANGE", 100),
-            ("ATTRIBUTE EDITOR", "ATTRIBUTE_EDITOR", 118),
-            ("TOOL SETTINGS", "TOOL_SETTINGS", 104),
+            ("CHANNEL BOX", "CHANNEL_BOX", 96),
+            ("MODELING TOOLKIT", "MODELING_TOOLKIT", 110),
+            ("HYPERSHADE", "HYPERSHADE", 92),
+            ("SHAPE EDITOR", "SHAPE_EDITOR", 92),
+            ("MAYA BRIDGE", "MAYA_INTERCHANGE", 88),
+            ("ATTRIBUTE EDITOR", "ATTRIBUTE_EDITOR", 104),
+            ("TOOL SETTINGS", "TOOL_SETTINGS", 92),
         ):
             etab = _create_rotated_edge_tab(label, mkey, self._on_mode_tab_clicked, height=h_px)
             self.edge_tabs[mkey] = etab
@@ -142,7 +144,7 @@ class _RightSidebarHostWidget:
         vlay.setSpacing(0)
         outer_hlay.addWidget(right_col, 1)
 
-        # Top Maya Sidebar Tab Bar (Ch Box | Mod Toolkit | Shape / Skin | .ma Bridge | Attr Ed | Tool Set)
+        # Top Maya Sidebar Tab Bar (Ch Box | Mod TK | Hypershade | Shape | .ma | Attr Ed | Tool)
         tab_strip = QtWidgets.QFrame()
         tab_strip.setObjectName("MayaStatusLine")
         tlay = QtWidgets.QHBoxLayout(tab_strip)
@@ -159,12 +161,18 @@ class _RightSidebarHostWidget:
         self.btn_mtk.setFixedHeight(21)
         self.btn_mtk.clicked.connect(lambda: self._on_mode_tab_clicked("MODELING_TOOLKIT"))
 
-        self.btn_se = QtWidgets.QPushButton("Shape/Skin")
+        self.btn_hs = QtWidgets.QPushButton("Hypershade")
+        self.btn_hs.setCheckable(True)
+        self.btn_hs.setFixedHeight(21)
+        self.btn_hs.setToolTip("Maya Hypershade Material Browser & Shader Graph")
+        self.btn_hs.clicked.connect(lambda: self._on_mode_tab_clicked("HYPERSHADE"))
+
+        self.btn_se = QtWidgets.QPushButton("Shape")
         self.btn_se.setCheckable(True)
         self.btn_se.setFixedHeight(21)
         self.btn_se.clicked.connect(lambda: self._on_mode_tab_clicked("SHAPE_EDITOR"))
 
-        self.btn_mi = QtWidgets.QPushButton(".ma Bridge")
+        self.btn_mi = QtWidgets.QPushButton(".ma")
         self.btn_mi.setCheckable(True)
         self.btn_mi.setFixedHeight(21)
         self.btn_mi.setToolTip("Maya .ma/.mb Interchange & Reference Manager")
@@ -175,13 +183,14 @@ class _RightSidebarHostWidget:
         self.btn_ae.setFixedHeight(21)
         self.btn_ae.clicked.connect(lambda: self._on_mode_tab_clicked("ATTRIBUTE_EDITOR"))
 
-        self.btn_ts = QtWidgets.QPushButton("Tool Set")
+        self.btn_ts = QtWidgets.QPushButton("Tool")
         self.btn_ts.setCheckable(True)
         self.btn_ts.setFixedHeight(21)
         self.btn_ts.clicked.connect(lambda: self._on_mode_tab_clicked("TOOL_SETTINGS"))
 
         tlay.addWidget(self.btn_cb, 1)
         tlay.addWidget(self.btn_mtk, 1)
+        tlay.addWidget(self.btn_hs, 1)
         tlay.addWidget(self.btn_se, 1)
         tlay.addWidget(self.btn_mi, 1)
         tlay.addWidget(self.btn_ae, 1)
@@ -212,6 +221,9 @@ class _RightSidebarHostWidget:
         self.mi_widget = interchange_panel.create_interchange_widget()
         self.stack.addWidget(self.mi_widget)
 
+        self.hs_widget = hypershade_panel.create_hypershade_widget()
+        self.stack.addWidget(self.hs_widget)
+
         self._attached_channels = None
 
     def attach_channels_widget(self, channels_widget: Any) -> None:
@@ -222,9 +234,9 @@ class _RightSidebarHostWidget:
             self._attached_channels = channels_widget
             if ext is not None and getattr(ext, "obj_header_bar", None) is not None:
                 self.page_cb_lay.addWidget(ext.obj_header_bar, 0)
-            self.page_cb_lay.addWidget(channels_widget, 5)
+            self.page_cb_lay.addWidget(channels_widget, 0)
             if ext is not None and ext.root is not None:
-                self.page_cb_lay.addWidget(ext.root, 6)
+                self.page_cb_lay.addWidget(ext.root, 1)
                 ext.root.show()
         channels_widget.show()
 
@@ -243,6 +255,7 @@ class _RightSidebarHostWidget:
         m = (mode or "CHANNEL_BOX").upper()
         self.btn_cb.setChecked(m == "CHANNEL_BOX")
         self.btn_mtk.setChecked(m == "MODELING_TOOLKIT")
+        self.btn_hs.setChecked(m == "HYPERSHADE")
         self.btn_se.setChecked(m == "SHAPE_EDITOR")
         self.btn_mi.setChecked(m == "MAYA_INTERCHANGE")
         self.btn_ae.setChecked(m == "ATTRIBUTE_EDITOR")
@@ -272,6 +285,10 @@ class _RightSidebarHostWidget:
             if self.mi_widget is not None:
                 self.mi_widget.refresh_from_scene()
             self.stack.setCurrentIndex(5)
+        elif m == "HYPERSHADE":
+            if self.hs_widget is not None:
+                self.hs_widget.refresh_from_scene()
+            self.stack.setCurrentIndex(6)
         else:
             if self._attached_channels is not None:
                 self._attached_channels.show()
@@ -280,7 +297,7 @@ class _RightSidebarHostWidget:
 
 
 class RightAreaQtDock:
-    """Right-column `WS_CHILD` dock manager supporting `Channel Box`, `Modeling Toolkit`, `Shape / Skin`, `Maya Interchange`, `Attribute Editor`, `Tool Settings`, and `Native Properties`."""
+    """Right-column `WS_CHILD` dock manager supporting `Channel Box`, `Modeling Toolkit`, `Hypershade`, `Shape / Skin`, `Maya Interchange`, `Attribute Editor`, `Tool Settings`, and `Native Properties`."""
 
     DEFAULT_WIDTH = 340
 
@@ -322,6 +339,7 @@ class RightAreaQtDock:
             in (
                 "CHANNEL_BOX",
                 "MODELING_TOOLKIT",
+                "HYPERSHADE",
                 "SHAPE_EDITOR",
                 "MAYA_INTERCHANGE",
                 "ATTRIBUTE_EDITOR",
@@ -364,6 +382,7 @@ class RightAreaQtDock:
         if self._mode in (
             "CHANNEL_BOX",
             "MODELING_TOOLKIT",
+            "HYPERSHADE",
             "SHAPE_EDITOR",
             "MAYA_INTERCHANGE",
             "ATTRIBUTE_EDITOR",
@@ -552,6 +571,13 @@ class RightAreaQtDock:
             self._channels_widget, target_mode="MAYA_INTERCHANGE"
         )
 
+    def show_hypershade(self) -> bool:
+        """Show the Maya Qt `Hypershade Material Browser & Lookdev` tab in the right dock."""
+        hypershade_panel.refresh_hypershade_widgets()
+        return self._dock_host_in_right_area(
+            self._channels_widget, target_mode="HYPERSHADE"
+        )
+
     def show_native_properties(self, properties_context: str = "OBJECT") -> bool:
         """Suspend the `WS_CHILD` overlay to expose Blender's native `PROPERTIES` area."""
         import bpy
@@ -683,6 +709,7 @@ class RightAreaQtDock:
         attribute_editor.teardown_attribute_editor()
         tool_settings.teardown_tool_settings()
         interchange_panel.teardown_interchange_widgets()
+        hypershade_panel.teardown_hypershade_widgets()
         if self._host_container is not None:
             try:
                 self._host_container.root.hide()

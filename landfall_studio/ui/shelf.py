@@ -67,10 +67,11 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
         {"id": "isolate", "label": "Isolate", "icon": "isolate", "tool_ctx": "DISPLAY", "tip": "Isolate Selected (Ctrl+1)"},
     ],
     "UV & Shading": [
+        {"id": "hypershade", "label": "Hypershade", "icon": "pbr_shader", "tool_ctx": "SHADER", "tip": "Open Maya Hypershade Material Browser & Shader Graph"},
+        {"id": "pbr_shader", "label": "Std Surface", "icon": "pbr_shader", "tool_ctx": "SHADER", "tip": "Assign New Standard Surface / Principled Shader"},
         {"id": "uv_mode", "label": "UV Mode", "icon": "uv_unwrap", "tool_ctx": "UV", "tip": "Enter UV Component Mode (F12)"},
         {"id": "uv_unwrap_pack", "label": "Auto UV", "icon": "uv_unwrap", "tool_ctx": "UV", "tip": "Auto Unwrap & Pack UVs"},
         {"id": "texel_density", "label": "Texel Den", "icon": "texel_density", "tool_ctx": "UV", "tip": "Measure / Apply Texel Density (2048 Map)"},
-        {"id": "pbr_shader", "label": "Std Surface", "icon": "pbr_shader", "tool_ctx": "SHADER", "tip": "Assign New Standard Surface / Principled Shader"},
         {"id": "wire_on_shaded", "label": "Wire/Shaded", "icon": "wire_on_shaded", "tool_ctx": "DISPLAY", "tip": "Toggle Wireframe on Shaded"},
     ],
     "Deform & Rigging": [
@@ -106,11 +107,17 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
     global _active_shelf_tool_id
     import bpy
     from .. import character, interchange, modeling
-    from . import desktop, interchange_panel, modeling_toolkit, shape_editor
+    from . import desktop, hypershade_panel, interchange_panel, modeling_toolkit, shape_editor
 
     iid = (item_id or "").strip().lower()
     _active_shelf_tool_id = iid
     refresh_top_shelf_status()
+
+    if iid == "hypershade":
+        res = desktop.cycle_right_dock("HYPERSHADE")
+        hypershade_panel.refresh_hypershade_widgets()
+        desktop.set_command_feedback("HypershadeWindow", "Hypershade Lookdev Dock Open")
+        return {"ok": True, "item_id": iid, "result": res}
 
     if iid in ("maya_bridge_tab", "import_maya", "save_maya"):
         res = desktop.cycle_right_dock("MAYA_INTERCHANGE")
@@ -605,9 +612,9 @@ class MayaShelfWidget:
         # 8. Workspace Selector (`Modeling Standard ▾`) + Sidebar Quick Switches
         self.cmb_workspace = QtWidgets.QComboBox()
         self.cmb_workspace.addItems(
-            ["Modeling Standard", "Maya Classic", "Rigging & Deform", "UV Editing", "Pipeline & .ma"]
+            ["Modeling Standard", "Maya Classic", "Lookdev / Hypershade", "Rigging & Deform", "Pipeline & .ma"]
         )
-        self.cmb_workspace.setFixedWidth(124)
+        self.cmb_workspace.setFixedWidth(134)
         self.cmb_workspace.setFixedHeight(22)
         self.cmb_workspace.currentIndexChanged.connect(self._on_workspace_preset_changed)
         slay.addWidget(self.cmb_workspace)
@@ -616,6 +623,7 @@ class MayaShelfWidget:
             ("Outliner", "OUTLINER", "Toggle Left DAG Outliner"),
             ("Ch Box", "CHANNEL_BOX", "Show Channel Box / Layer Editor (Ctrl+A)"),
             ("Mod", "MODELING_TOOLKIT", "Show Maya Modeling Toolkit"),
+            ("Hypershade", "HYPERSHADE", "Show Maya Hypershade Material Browser & Lookdev"),
             ("Shape", "SHAPE_EDITOR", "Show Maya Shape Editor & Skin Weights"),
             (".ma Ref", "MAYA_INTERCHANGE", "Show Maya .ma/.mb Interchange & Reference Editor"),
             ("Attr", "ATTRIBUTE_EDITOR", "Show Attribute Editor (Ctrl+A)"),

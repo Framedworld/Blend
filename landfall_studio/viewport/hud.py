@@ -245,7 +245,7 @@ def _draw_maya_hud_callback():
 
     font_id = 0
 
-    # 0. Figma Make Top 26px Viewport Panel Menu Strip ("Panels  View  Shading  Lighting  Show  Renderer  Panels")
+    # 0. Figma Make Top 26px Viewport Panel Menu Strip ("Panels  View  Shading  Lighting  Show  Renderer  Help")
     strip_h = 26.0
     strip_y = rh - strip_h
     _draw_rect_2d(shader, 0.0, strip_y, rw, strip_h, (0.125, 0.14, 0.16, 0.94))
@@ -253,7 +253,7 @@ def _draw_maya_hud_callback():
 
     blf.size(font_id, 10.5)
     menu_x = 12.0
-    for m_txt in ("Panels", "View", "Shading", "Lighting", "Show", "Renderer"):
+    for m_txt in ("Panels", "View", "Shading", "Lighting", "Show", "Renderer", "Help"):
         blf.color(font_id, 0.61, 0.65, 0.70, 0.95)
         blf.position(font_id, menu_x, strip_y + 8.0, 0)
         blf.draw(font_id, m_txt)
@@ -531,7 +531,34 @@ def _draw_maya_hud_callback():
     except Exception:
         pass
 
-    # 5. Bottom-Center Figma Make Camera Pill ("persp  |  35mm")
+    # 5. Bottom-Left Maya World Axis Tripod (X / Y / Z)
+    ax_cx = pad_x + 16.0
+    ax_cy = 34.0
+    # Y (Green vertical), X (Red right), Z (Blue diagonal)
+    _draw_rect_2d(shader, ax_cx - 1.0, ax_cy, 2.0, 26.0, (0.29, 0.72, 0.40, 0.95))
+    _draw_rect_2d(shader, ax_cx, ax_cy - 1.0, 26.0, 2.0, (0.89, 0.36, 0.42, 0.95))
+    for step_i in range(10):
+        _draw_rect_2d(
+            shader,
+            ax_cx - step_i * 1.6,
+            ax_cy - step_i * 1.2,
+            2.2,
+            2.2,
+            (0.31, 0.61, 0.90, 0.95),
+        )
+    _draw_rect_2d(shader, ax_cx - 2.5, ax_cy - 2.5, 5.0, 5.0, (0.85, 0.88, 0.92, 0.98))
+    blf.size(font_id, 9.5)
+    blf.color(font_id, 0.29, 0.78, 0.44, 1.0)
+    blf.position(font_id, ax_cx - 3.0, ax_cy + 29.0, 0)
+    blf.draw(font_id, "Y")
+    blf.color(font_id, 0.92, 0.40, 0.45, 1.0)
+    blf.position(font_id, ax_cx + 29.0, ax_cy - 3.0, 0)
+    blf.draw(font_id, "X")
+    blf.color(font_id, 0.36, 0.67, 0.96, 1.0)
+    blf.position(font_id, ax_cx - 24.0, ax_cy - 18.0, 0)
+    blf.draw(font_id, "Z")
+
+    # 6. Bottom-Center Figma Make Camera Pill ("persp  |  35mm")
     cam_base = str(stats["camera_label"])
     cam_txt = f"{cam_base}   |   35mm" if "mm" not in cam_base else cam_base
     blf.size(font_id, 10.5)

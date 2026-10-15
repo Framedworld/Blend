@@ -1157,7 +1157,7 @@ class MayaChannelBoxExtensionWidget:
 
         self.splitter.addWidget(hist_pane)
 
-        # --- Bottom half of extension: Maya Display Layer Editor ---
+        # --- Bottom half of extension: Maya Layer Editor (`Display | Anim` Tabs) ---
         layer_pane = QtWidgets.QFrame()
         llay = QtWidgets.QVBoxLayout(layer_pane)
         llay.setContentsMargins(0, 0, 0, 0)
@@ -1167,30 +1167,55 @@ class MayaChannelBoxExtensionWidget:
         layer_hdr.setObjectName("MayaSectionHeader")
         lr_row = QtWidgets.QHBoxLayout(layer_hdr)
         lr_row.setContentsMargins(6, 2, 4, 2)
-        lbl_lr = QtWidgets.QLabel("DISPLAY LAYERS")
+        lr_row.setSpacing(3)
+
+        lbl_lr = QtWidgets.QLabel("LAYERS")
         lbl_lr.setObjectName("MayaSectionTitle")
+        lr_row.addWidget(lbl_lr)
+
+        # Maya Layer Editor Tab Toggle: Display | Anim
+        self.btn_tab_display = QtWidgets.QPushButton("Display")
+        self.btn_tab_display.setObjectName("MayaMaskPill")
+        self.btn_tab_display.setCheckable(True)
+        self.btn_tab_display.setChecked(True)
+        self.btn_tab_display.setFixedHeight(18)
+        self.btn_tab_display.clicked.connect(lambda: self.set_layer_editor_tab("DISPLAY"))
+        lr_row.addWidget(self.btn_tab_display)
+
+        self.btn_tab_anim = QtWidgets.QPushButton("Anim")
+        self.btn_tab_anim.setObjectName("MayaMaskPill")
+        self.btn_tab_anim.setCheckable(True)
+        self.btn_tab_anim.setChecked(False)
+        self.btn_tab_anim.setFixedHeight(18)
+        self.btn_tab_anim.clicked.connect(lambda: self.set_layer_editor_tab("ANIM"))
+        lr_row.addWidget(self.btn_tab_anim)
+
+        lr_row.addStretch(1)
+
         self.btn_new_layer = QtWidgets.QPushButton("+ Layer")
-        self.btn_new_layer.setToolTip("Create new Display Layer with selected objects")
+        self.btn_new_layer.setToolTip("Create new Display or Animation Layer")
         self.btn_new_layer.setFixedHeight(18)
         self.btn_new_layer.clicked.connect(self._on_new_layer_clicked)
 
         self.btn_assign_layer = QtWidgets.QPushButton("Assign")
-        self.btn_assign_layer.setToolTip("Assign selected objects to highlighted Display Layer")
+        self.btn_assign_layer.setToolTip("Assign selected objects / Key selected on active layer")
         self.btn_assign_layer.setFixedHeight(18)
         self.btn_assign_layer.clicked.connect(self._on_assign_layer_clicked)
 
         self.btn_del_layer = QtWidgets.QPushButton("Del")
-        self.btn_del_layer.setToolTip("Delete selected Display Layer")
+        self.btn_del_layer.setToolTip("Delete selected Display or Animation Layer")
         self.btn_del_layer.setFixedHeight(18)
         self.btn_del_layer.clicked.connect(self._on_delete_layer_clicked)
 
-        lr_row.addWidget(lbl_lr)
-        lr_row.addStretch(1)
         lr_row.addWidget(self.btn_new_layer)
         lr_row.addWidget(self.btn_assign_layer)
         lr_row.addWidget(self.btn_del_layer)
         llay.addWidget(layer_hdr)
 
+        self.layer_stack = QtWidgets.QStackedWidget()
+        llay.addWidget(self.layer_stack, 1)
+
+        # Page 0: Maya Display Layers (V | P | Mode | Layer Name | #)
         self.tbl_layers = QtWidgets.QTableWidget(0, 5)
         self.tbl_layers.setHorizontalHeaderLabels(["V", "P", "Mode", "Layer Name", "#"])
         self.tbl_layers.verticalHeader().setVisible(False)
@@ -1205,69 +1230,158 @@ class MayaChannelBoxExtensionWidget:
 
         self.tbl_layers.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.tbl_layers.cellClicked.connect(self._on_layer_cell_clicked)
-        llay.addWidget(self.tbl_layers, 1)
+        self.layer_stack.addWidget(self.tbl_layers)
 
+        # Page 1: Maya Animation Layers (M | S | L | Mode | Layer Name | Wt)
+        self.tbl_anim_layers = QtWidgets.QTableWidget(0, 6)
+        self.tbl_anim_layers.setHorizontalHeaderLabels(["M", "S", "L", "Mode", "Anim Layer", "Wt"])
+        self.tbl_anim_layers.verticalHeader().setVisible(False)
+        self.tbl_anim_layers.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.tbl_anim_layers.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.tbl_anim_layers.horizontalHeader().resizeSection(0, 22)
+        self.tbl_anim_layers.horizontalHeader().resizeSection(1, 22)
+        self.tbl_anim_layers.horizontalHeader().resizeSection(2, 22)
+        self.tbl_anim_layers.horizontalHeader().resizeSection(3, 36)
+        self.tbl_anim_layers.horizontalHeader().resizeSection(5, 38)
+        self.tbl_anim_layers.horizontalHeader().setStretchLastSection(False)
+        self.tbl_anim_layers.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.tbl_anim_layers.cellClicked.connect(self._on_anim_layer_cell_clicked)
+        self.layer_stack.addWidget(self.tbl_anim_layers)
+
+        self._active_layer_tab = "DISPLAY"
         self.splitter.addWidget(layer_pane)
-        self.splitter.setSizes([160, 125])
+        self.splitter.setSizes([185, 145])
+
+    def set_layer_editor_tab(self, tab_mode: str) -> None:
+        m = (tab_mode or "DISPLAY").upper()
+        self._active_layer_tab = "ANIM" if m == "ANIM" else "DISPLAY"
+        self.btn_tab_display.blockSignals(True)
+        self.btn_tab_anim.blockSignals(True)
+        self.btn_tab_display.setChecked(self._active_layer_tab == "DISPLAY")
+        self.btn_tab_anim.setChecked(self._active_layer_tab == "ANIM")
+        self.btn_tab_display.blockSignals(False)
+        self.btn_tab_anim.blockSignals(False)
+        if self._active_layer_tab == "ANIM":
+            self.btn_new_layer.setText("+ Anim")
+            self.btn_assign_layer.setText("Key")
+            self.layer_stack.setCurrentIndex(1)
+        else:
+            self.btn_new_layer.setText("+ Layer")
+            self.btn_assign_layer.setText("Assign")
+            self.layer_stack.setCurrentIndex(0)
+        self.refresh()
 
     def _install_axis_badge_delegate(self, channels_widget: Any) -> None:
-        """Install a custom `QStyledItemDelegate` on `tbl000` column 1 to draw Figma Make X/Y/Z axis badges (`#E35D6A`, `#4AB866`, `#4E9CE6`)."""
+        """Install a custom `QStyledItemDelegate` on `tbl000` column 1 to render Maya channel names (`Translate X`, `Rotate Y`, `Scale Z`) with X/Y/Z axis dots."""
         try:
             from qtpy import QtCore, QtGui, QtWidgets
 
             tbl = getattr(channels_widget, "tbl000", None)
-            if tbl is None or getattr(tbl, "_lf_axis_delegate_installed", False):
+            if tbl is None:
                 return
 
-            class _MayaChannelAxisDelegate(QtWidgets.QStyledItemDelegate):
-                AXIS_COLORS = {
-                    "X": QtGui.QColor("#E35D6A"),
-                    "Y": QtGui.QColor("#4AB866"),
-                    "Z": QtGui.QColor("#4E9CE6"),
-                }
+            axis_colors = {
+                "X": QtGui.QColor("#E35D6A"),
+                "Y": QtGui.QColor("#4AB866"),
+                "Z": QtGui.QColor("#4E9CE6"),
+            }
+            maya_labels = {
+                "location_x": "Translate X",
+                "location_y": "Translate Y",
+                "location_z": "Translate Z",
+                "rotation_x": "Rotate X",
+                "rotation_y": "Rotate Y",
+                "rotation_z": "Rotate Z",
+                "scale_x": "Scale X",
+                "scale_y": "Scale Y",
+                "scale_z": "Scale Z",
+                "hide_viewport": "Visibility",
+            }
 
-                def paint(self, painter: QtGui.QPainter, option, index) -> None:
-                    super().paint(painter, option, index)
-                    txt = str(index.data(QtCore.Qt.DisplayRole) or "").strip()
-                    if not txt:
+            class _MayaChannelAxisDelegate(QtWidgets.QStyledItemDelegate):
+                def paint(self, painter, option, index) -> None:
+                    raw = str(index.data(QtCore.Qt.DisplayRole) or "").strip()
+                    if not raw:
+                        super().paint(painter, option, index)
                         return
-                    last_ch = txt[-1].upper()
-                    if last_ch in self.AXIS_COLORS and (
-                        txt.endswith(" X")
-                        or txt.endswith(" Y")
-                        or txt.endswith(" Z")
-                        or txt.lower().startswith(("translate", "rotate", "scale"))
+
+                    painter.save()
+                    painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+                    r = option.rect
+                    is_sel = bool(option.state & QtWidgets.QStyle.State_Selected)
+                    if is_sel:
+                        painter.fillRect(r, QtGui.QColor("#225976"))
+                    elif index.row() % 2 == 1:
+                        painter.fillRect(r, QtGui.QColor("#22252A"))
+                    else:
+                        painter.fillRect(r, QtGui.QColor("#1E2126"))
+
+                    label = maya_labels.get(raw, raw)
+                    last_ch = label[-1].upper() if label else ""
+                    text_x = r.left() + 6
+                    if last_ch in axis_colors and (
+                        raw.endswith(("_x", "_y", "_z"))
+                        or label.endswith((" X", " Y", " Z"))
                     ):
-                        painter.save()
-                        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-                        c = self.AXIS_COLORS[last_ch]
-                        r = option.rect
                         dot_rect = QtCore.QRectF(
-                            float(r.left() + 4),
+                            float(r.left() + 6),
                             float(r.center().y() - 3.0),
                             6.0,
                             6.0,
                         )
                         painter.setPen(QtCore.Qt.NoPen)
-                        painter.setBrush(c)
+                        painter.setBrush(axis_colors[last_ch])
                         painter.drawEllipse(dot_rect)
-                        painter.restore()
+                        text_x = r.left() + 17
+
+                    f = painter.font()
+                    f.setPixelSize(11)
+                    f.setBold(is_sel)
+                    painter.setFont(f)
+                    painter.setPen(QtGui.QColor("#FFFFFF" if is_sel else "#D5DCE6"))
+                    text_rect = QtCore.QRect(text_x, r.top(), max(10, r.width() - (text_x - r.left()) - 4), r.height())
+                    painter.drawText(text_rect, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft, label)
+                    painter.restore()
 
             delegate = _MayaChannelAxisDelegate(tbl)
-            tbl.setItemDelegateForColumn(1, delegate)
+            tbl.setItemDelegateForColumn(0, delegate)
             tbl._lf_axis_delegate_installed = True
             tbl._lf_axis_delegate = delegate
         except Exception:
             pass
 
+    def _clamp_host_channel_table_height(self) -> None:
+        """Keep `channels_widget` and `tbl000` compact so `SHAPES` and `INPUTS` sit directly below `Scale Z`."""
+        try:
+            if self.host is None:
+                return
+            for attr_name in ("header", "footer", "txt001"):
+                sub = getattr(self.host, attr_name, None)
+                if sub is not None and hasattr(sub, "hide"):
+                    sub.hide()
+            self.host.setMinimumHeight(0)
+            self.host.setMaximumHeight(212)
+            tbl = getattr(self.host, "tbl000", None)
+            if tbl is not None:
+                tbl.setMinimumHeight(0)
+                tbl.setMaximumHeight(180)
+                if getattr(tbl, "_lf_axis_delegate", None) is not None:
+                    tbl.setItemDelegateForColumn(0, tbl._lf_axis_delegate)
+                tbl.viewport().update()
+        except Exception:
+            pass
+
     def refresh(self) -> None:
-        """Synchronize Object Header, `SHAPES`, `INPUTS`, and `Display Layers` from Blender's live scene."""
+        """Synchronize Object Header, `SHAPES`, `INPUTS`, `Display Layers`, and `Animation Layers` from Blender's live scene."""
         if self._updating:
             return
         self._updating = True
         try:
             import bpy
             from qtpy import QtCore, QtGui, QtWidgets
+            from .. import advanced
+
+            self._clamp_host_channel_table_height()
 
             active = getattr(bpy.context.view_layer.objects, "active", None) if bpy.context.view_layer else None
             sinfo = get_object_shape_info(active)
@@ -1360,6 +1474,47 @@ class MayaChannelBoxExtensionWidget:
                 self.tbl_layers.setItem(r, 4, c_item)
                 self.tbl_layers.setRowHeight(r, 20)
             self.tbl_layers.blockSignals(False)
+
+            # Populate Animation Layers table
+            anim_lyrs = advanced.list_anim_layers(active) if active is not None else []
+            self.tbl_anim_layers.blockSignals(True)
+            self.tbl_anim_layers.setRowCount(len(anim_lyrs))
+            for r, alyr in enumerate(anim_lyrs):
+                m_item = QtWidgets.QTableWidgetItem("M" if alyr["mute"] else "·")
+                m_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                m_item.setForeground(QtGui.QBrush(QtGui.QColor("#E35D6A" if alyr["mute"] else "#555B66")))
+                m_item.setData(QtCore.Qt.UserRole, alyr["name"])
+
+                s_item = QtWidgets.QTableWidgetItem("S" if alyr["solo"] else "·")
+                s_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                s_item.setForeground(QtGui.QBrush(QtGui.QColor("#E5A93C" if alyr["solo"] else "#555B66")))
+
+                l_item = QtWidgets.QTableWidgetItem("L" if alyr["lock"] else "·")
+                l_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                l_item.setForeground(QtGui.QBrush(QtGui.QColor("#69B8DC" if alyr["lock"] else "#555B66")))
+
+                mode_short = "BASE" if alyr["is_base"] else ("OVR" if alyr["mode"] == "OVERRIDE" else "ADD")
+                md_item = QtWidgets.QTableWidgetItem(mode_short)
+                md_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                md_item.setForeground(
+                    QtGui.QBrush(QtGui.QColor("#4AB866" if mode_short == "ADD" else "#69B8DC"))
+                )
+
+                nm_item = QtWidgets.QTableWidgetItem(alyr["name"])
+                nm_item.setForeground(QtGui.QBrush(QtGui.QColor("#E6EDF3")))
+
+                wt_item = QtWidgets.QTableWidgetItem(f"{float(alyr['weight']):.2f}")
+                wt_item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                wt_item.setForeground(QtGui.QBrush(QtGui.QColor("#69B8DC")))
+
+                self.tbl_anim_layers.setItem(r, 0, m_item)
+                self.tbl_anim_layers.setItem(r, 1, s_item)
+                self.tbl_anim_layers.setItem(r, 2, l_item)
+                self.tbl_anim_layers.setItem(r, 3, md_item)
+                self.tbl_anim_layers.setItem(r, 4, nm_item)
+                self.tbl_anim_layers.setItem(r, 5, wt_item)
+                self.tbl_anim_layers.setRowHeight(r, 20)
+            self.tbl_anim_layers.blockSignals(False)
         except Exception:
             pass
         finally:
@@ -1414,30 +1569,60 @@ class MayaChannelBoxExtensionWidget:
         self.refresh()
 
     def _on_new_layer_clicked(self) -> None:
+        if self._active_layer_tab == "ANIM":
+            from .. import advanced
+
+            advanced.create_anim_layer(mode="ADD", weight=1.0)
+            self.refresh()
+            return
         create_display_layer(assign_selected=True)
         self.refresh()
 
     def _on_assign_layer_clicked(self) -> None:
+        from qtpy import QtCore
+
+        if self._active_layer_tab == "ANIM":
+            from .. import advanced
+
+            row = self.tbl_anim_layers.currentRow()
+            item = self.tbl_anim_layers.item(max(0, row), 0)
+            lname = str(item.data(QtCore.Qt.UserRole) or "") if item is not None else ""
+            if lname:
+                advanced.keyframe_on_anim_layer(layer_name=lname)
+                self.refresh()
+            return
+
         row = self.tbl_layers.currentRow()
         if row < 0:
             return
         item = self.tbl_layers.item(row, 0)
         if item is not None:
-            from qtpy import QtCore
-
             lname = str(item.data(QtCore.Qt.UserRole) or "")
             if lname:
                 assign_objects_to_display_layer(lname)
                 self.refresh()
 
     def _on_delete_layer_clicked(self) -> None:
+        from qtpy import QtCore
+
+        if self._active_layer_tab == "ANIM":
+            from .. import advanced
+
+            row = self.tbl_anim_layers.currentRow()
+            if row < 0:
+                return
+            item = self.tbl_anim_layers.item(row, 0)
+            lname = str(item.data(QtCore.Qt.UserRole) or "") if item is not None else ""
+            if lname:
+                advanced.remove_anim_layer(layer_name=lname)
+                self.refresh()
+            return
+
         row = self.tbl_layers.currentRow()
         if row < 0:
             return
         item = self.tbl_layers.item(row, 0)
         if item is not None:
-            from qtpy import QtCore
-
             lname = str(item.data(QtCore.Qt.UserRole) or "")
             if lname:
                 delete_display_layer(lname)
@@ -1463,12 +1648,36 @@ class MayaChannelBoxExtensionWidget:
             set_display_layer_state(lname, cycle_mode=True)
         self.refresh()
 
+    def _on_anim_layer_cell_clicked(self, row: int, col: int) -> None:
+        from qtpy import QtCore
+        from .. import advanced
+
+        item = self.tbl_anim_layers.item(row, 0)
+        if item is None:
+            return
+        lname = str(item.data(QtCore.Qt.UserRole) or "")
+        if not lname:
+            return
+        info = next((l for l in advanced.list_anim_layers() if l["name"] == lname), None)
+        if info is None:
+            return
+        if col == 0:
+            advanced.set_anim_layer_state(layer_name=lname, mute=not info["mute"])
+        elif col == 1:
+            advanced.set_anim_layer_state(layer_name=lname, solo=not info["solo"])
+        elif col == 2:
+            advanced.set_anim_layer_state(layer_name=lname, lock=not info["lock"])
+        elif col == 3 and not info["is_base"]:
+            next_m = "OVERRIDE" if info["mode"] == "ADD" else "ADD"
+            advanced.set_anim_layer_state(layer_name=lname, mode=next_m)
+        self.refresh()
+
 
 _channel_box_ext_instance: Optional[MayaChannelBoxExtensionWidget] = None
 
 
 def ensure_channel_box_extensions(channels_widget: Any) -> Optional[MayaChannelBoxExtensionWidget]:
-    """Attach `MayaChannelBoxExtensionWidget` (`SHAPES` + `INPUTS` + `Display Layers`) to `channels_widget`."""
+    """Attach `MayaChannelBoxExtensionWidget` (`SHAPES` + `INPUTS` + `Display/Anim Layers`) to `channels_widget`."""
     global _channel_box_ext_instance
     if channels_widget is None:
         return None
@@ -1479,11 +1688,17 @@ def ensure_channel_box_extensions(channels_widget: Any) -> Optional[MayaChannelB
 
     try:
         style.apply_studio_style(channels_widget)
-        # Hide floating uitk header bar when embedded in Maya dock
+        # Hide floating uitk header bar and cap Channel Box height so SHAPES & INPUTS sit flush below Scale Z
         hdr = getattr(channels_widget, "header", None)
         if hdr is not None:
-            hdr.setMaximumHeight(20)
+            hdr.hide()
+        txt1 = getattr(channels_widget, "txt001", None)
+        if txt1 is not None:
+            txt1.hide()
+        channels_widget.setMinimumHeight(0)
+        channels_widget.setMaximumHeight(212)
         ext = MayaChannelBoxExtensionWidget(channels_widget)
+        channels_widget._lf_cb_ext_container = ext
         _channel_box_ext_instance = ext
         ext.refresh()
         return ext

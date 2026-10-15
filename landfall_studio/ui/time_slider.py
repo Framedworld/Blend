@@ -343,23 +343,23 @@ class MayaTimeSliderController:
 
         v_layout.addLayout(row2)
 
-        # Row 3: Figma Make Bottom MEL / PY Command & Result Bar (22px)
+        # Row 3: Figma Make Bottom PYTHON Command & Result Bar (22px)
         row3 = QtWidgets.QHBoxLayout()
         row3.setContentsMargins(0, 0, 0, 0)
         row3.setSpacing(4)
 
-        self.btn_cmd_lang = QtWidgets.QPushButton("MEL  |  PY", self.root)
+        self.btn_cmd_lang = QtWidgets.QPushButton("PYTHON", self.root)
         self.btn_cmd_lang.setFixedSize(64, 19)
-        self.btn_cmd_lang.setToolTip("Execute Python / MEL Command Expression")
+        self.btn_cmd_lang.setToolTip("Execute Python / Studio Command Expression")
         self.btn_cmd_lang.setStyleSheet(
-            "background-color: #1D2126; color: #69B8DC; border: 1px solid #30363F; "
-            "border-radius: 2px; font-size: 9px; font-weight: 700;"
+            "background-color: #1A2836; color: #69B8DC; border: 1px solid #2B5B78; "
+            "border-radius: 2px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 9px; font-weight: 700;"
         )
         row3.addWidget(self.btn_cmd_lang)
 
         self.txt_command = QtWidgets.QLineEdit(self.root)
         self.txt_command.setFixedHeight(19)
-        self.txt_command.setPlaceholderText("polyBevel -offset 0.15 -segments 2;   // Enter Python or Studio command...")
+        self.txt_command.setPlaceholderText("import bpy; bpy.context.active_object   # Enter Python or Studio command...")
         self.txt_command.setStyleSheet(
             "background-color: #141619; color: #C8D1DC; border: 1px solid #2A2E35; "
             "border-radius: 2px; padding: 0 6px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 10px;"

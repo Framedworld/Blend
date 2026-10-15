@@ -573,8 +573,8 @@ def restore_panel(panel_id: str) -> Dict[str, Any]:
 
 
 def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
-    """Cycle the right-hand dock (`Ctrl+A` in Maya) between `CHANNEL_BOX`, `MODELING_TOOLKIT`, `SHAPE_EDITOR`, `MAYA_INTERCHANGE`, `ATTRIBUTE_EDITOR`, `TOOL_SETTINGS`, `NATIVE_PROPERTIES`, or `HIDDEN`."""
-    from . import interchange_panel
+    """Cycle the right-hand dock (`Ctrl+A` in Maya) between `CHANNEL_BOX`, `MODELING_TOOLKIT`, `HYPERSHADE`, `SHAPE_EDITOR`, `MAYA_INTERCHANGE`, `ATTRIBUTE_EDITOR`, `TOOL_SETTINGS`, `NATIVE_PROPERTIES`, or `HIDDEN`."""
+    from . import hypershade_panel, interchange_panel
 
     rdock = _get_right_dock()
     widget, slots = get_panel_widget_and_slots("channels")
@@ -593,6 +593,7 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
     elif req in (
         "CHANNEL_BOX",
         "MODELING_TOOLKIT",
+        "HYPERSHADE",
         "SHAPE_EDITOR",
         "MAYA_INTERCHANGE",
         "ATTRIBUTE_EDITOR",
@@ -609,6 +610,9 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
         sync_channels_now()
     elif next_mode == "MODELING_TOOLKIT":
         rdock.show_modeling_toolkit()
+    elif next_mode == "HYPERSHADE":
+        rdock.show_hypershade()
+        hypershade_panel.refresh_hypershade_widgets()
     elif next_mode == "SHAPE_EDITOR":
         rdock.show_shape_editor()
     elif next_mode == "MAYA_INTERCHANGE":
@@ -798,13 +802,14 @@ def _on_live_scene_or_depsgraph_update(*_args) -> None:
     if sig == _last_selection_value_sig:
         return
     _last_selection_value_sig = sig
-    from . import interchange_panel
+    from . import hypershade_panel, interchange_panel
 
     sync_channels_now()
     channel_box_ext.refresh_channel_box_extensions()
     modeling_toolkit.refresh_modeling_toolkit_widgets()
     shape_editor.refresh_shape_editor_widgets()
     interchange_panel.refresh_interchange_widgets()
+    hypershade_panel.refresh_hypershade_widgets()
     time_slider.refresh_time_slider_widgets()
     shelf.refresh_top_shelf_status()
     attribute_editor.refresh_attribute_editor()
@@ -888,8 +893,9 @@ def sync_channels_now() -> Dict[str, Any]:
 
 
 def get_channels_snapshot() -> Dict[str, Any]:
-    """Read back the live `Channels` target text, active filter, `{channel_name: display_value}` map, `SHAPES`, `INPUTS`, and `Display Layers`."""
+    """Read back the live `Channels` target text, active filter, `{channel_name: display_value}` map, `SHAPES`, `INPUTS`, `Display Layers`, and `Animation Layers`."""
     import bpy
+    from .. import advanced
 
     widget, slots = get_panel_widget_and_slots("channels")
     if widget is None or slots is None:
@@ -904,6 +910,7 @@ def get_channels_snapshot() -> Dict[str, Any]:
             "shape": {},
             "inputs": [],
             "display_layers": [],
+            "anim_layers": [],
         }
 
     target_txt = ""
@@ -945,6 +952,7 @@ def get_channels_snapshot() -> Dict[str, Any]:
         "shape": channel_box_ext.get_object_shape_info(active),
         "inputs": channel_box_ext.get_object_inputs(active),
         "display_layers": channel_box_ext.list_display_layers(),
+        "anim_layers": advanced.list_anim_layers(active) if active is not None else [],
     }
 
 
@@ -1220,7 +1228,7 @@ def set_command_feedback(
         ws = getattr(bpy.context, "workspace", None)
         if ws is not None and hasattr(ws, "status_text_set"):
             ws.status_text_set(
-                f"MEL/Py: {_command_feedback['command']}  |  Result: {_command_feedback['result']}"
+                f"Python: {_command_feedback['command']}  |  Result: {_command_feedback['result']}"
             )
     except Exception:
         pass
@@ -1403,6 +1411,7 @@ if bpy is not None:
                 ("CYCLE_3", "Cycle 3-Way (Channel Box -> Attribute Editor -> Tool Settings -> Hidden)", "Cycle all right-sidebar modes"),
                 ("CHANNEL_BOX", "Channel Box", "Show the docked Qt Channel Box"),
                 ("MODELING_TOOLKIT", "Modeling Toolkit", "Show the Maya Modeling Toolkit"),
+                ("HYPERSHADE", "Hypershade", "Show the Maya Hypershade Material Browser & Lookdev dock"),
                 ("SHAPE_EDITOR", "Shape / Skin Editor", "Show the Maya Shape Editor & Skin Weights dock"),
                 ("MAYA_INTERCHANGE", "Maya Interchange & References", "Show the Maya .ma/.mb Interchange & Reference Manager"),
                 ("ATTRIBUTE_EDITOR", "Attribute Editor", "Show the Maya Attribute Editor"),
