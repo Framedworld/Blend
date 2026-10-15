@@ -29,6 +29,7 @@ from landfall_studio.ui import (
     channel_box_ext,
     desktop,
     outliner,
+    right_dock,
     shelf,
     style,
     tool_settings,
@@ -186,6 +187,16 @@ def _composite_and_save(shot_filename: str) -> list[str]:
                     app.processEvents()
                 painter.drawPixmap(QtCore.QRect(int(tx), int(ty), int(tw), int(th)), tdock.widget.grab())
                 composited_docks.append("time_slider")
+
+            # Composite any floating Maya Tear-Off windows
+            for tpanel in right_dock.list_torn_off_panels():
+                tw_widget = tpanel.get("widget")
+                tx, ty, tw, th = tpanel.get("rect", (0, 0, 0, 0))
+                if tw_widget is not None and tw > 0 and th > 0:
+                    if app is not None:
+                        app.processEvents()
+                    painter.drawPixmap(QtCore.QRect(int(tx), int(ty), int(tw), int(th)), tw_widget.grab())
+                    composited_docks.append(f"tear_off:{tpanel.get('mode')}")
         finally:
             painter.end()
 
@@ -280,7 +291,8 @@ def _setup_hero_eevee_scene():
     except Exception:
         pass
 
-    # Add Bevel modifier and open polyBevel1 caddy
+    # Add Bevel modifier, procedural Geometry Nodes modifier, and open polyBevel1 caddy
+    channel_box_ext.ensure_procedural_geonodes_modifier(hero, name="geoNodes_Procedural1")
     modeling.invoke_modeling_caddy("BEVEL")
 
     # Add Shape Editor targets + Animation Layers + keyframes on hero for Channel Box & Time Slider
@@ -334,8 +346,8 @@ def _step_timer() -> float | None:
             _results["eevee_viewport_20"] = continuity.get_viewport_shading_state()
             _results["design_system"] = style.verify_three_layer_theme_sync(dpi_scale=1.0)
 
-            # Set Right Dock to Channel Box + Anim Layers
-            desktop.cycle_right_dock("CHANNEL_BOX")
+            # Set Workspace to Modeling Standard (de-cluttered 4-tab right spine + Channel Box + GeoNodes INPUTS)
+            desktop.apply_workspace_layout("Modeling Standard")
             desktop.sync_channels_now()
             channel_box_ext.refresh_channel_box_extensions()
             cb_widget, _ = ui.get_panel_widget_and_slots("channels")
@@ -346,8 +358,8 @@ def _step_timer() -> float | None:
             outliner.refresh_outliner()
             ui.refresh_time_slider_widgets()
             desktop.set_command_feedback(
-                "set_maya_viewport_shading('7') | set_viewport_renderer('EEVEE', ssao=True, shadows=True)",
-                "Result: Viewport 2.0 (EEVEE) • All Lights [7] • SSAO • Shadows • Smooth Cage [2]",
+                "apply_workspace_layout('Modeling Standard') | ensure_procedural_geonodes_modifier()",
+                "Result: Modeling Standard • Channel Box + GeoNodes INPUTS • Viewport 2.0 (EEVEE [7])",
             )
             _frame_viewport_camera(dist=5.1)
             _stage = 2
@@ -365,7 +377,8 @@ def _step_timer() -> float | None:
             _results["composited_docks"] = docks_1
             _results["screenshots"]["studio_eevee_desktop"] = str(AGENT_OUT_DIR / SHOT_1_NAME)
 
-            # Prepare Shot 2: Open Modernized GPU Radial Marking Menu (Shift+RMB — MODELING TOOLS) + polyExtrudeFace1 Caddy
+            # Prepare Shot 2: Open Modernized GPU Radial Marking Menu + polyExtrudeFace1 Caddy + Floating Tear-Off Window!
+            right_dock.tear_off_panel("TOOL_SETTINGS", x=1095, y=135, width=320, height=445)
             modeling.invoke_modeling_caddy("EXTRUDE")
             win = bpy.context.window_manager.windows[0]
             area = next((a for a in win.screen.areas if a.type == "VIEW_3D"), win.screen.areas[0])
@@ -382,8 +395,8 @@ def _step_timer() -> float | None:
                 )
             _results["marking_menu_state"] = marking_menus.get_marking_menu_state()
             desktop.set_command_feedback(
-                "marking_menu(menu_mode='TOOL', gesture='West -> Poly Cube / Extrude [Ctrl+E]')",
-                "Result: MODELING TOOLS [Shift+RMB] Radial Marking Menu Active",
+                "tear_off_panel('TOOL_SETTINGS') | marking_menu(menu_mode='TOOL')",
+                "Result: Floating Tear-Off Window (TOOL SETTINGS) + Shift+RMB Radial Marking Menu",
             )
             for r in area.regions:
                 r.tag_redraw()
@@ -391,30 +404,32 @@ def _step_timer() -> float | None:
             return 0.50
 
         if _stage == 3:
-            # Capture Shot 2: Modernized Radial Marking Menu + Connector Line + Caddy
+            # Capture Shot 2: Modernized Radial Marking Menu + Floating Tear-Off Window + Caddy
             _hide_native_blender_viewport_bars()
             _composite_and_save(SHOT_2_NAME)
             _results["screenshots"]["marking_menu_caddy"] = str(AGENT_OUT_DIR / SHOT_2_NAME)
             marking_menus.stop_studio_marking_menu()
+            right_dock.teardown_tear_off_windows()
 
-            # Prepare Shot 3: Docked Maya Attribute Editor + DAG Outliner + Viewport 2.0 (EEVEE Textured [6])
+            # Prepare Shot 3: Multi-Pane 'Lookdev / Hypershade' Workspace Layout (Top EEVEE Viewport + Bottom Blender ShaderNodeTree + Right Hypershade Browser)
             continuity.set_maya_viewport_shading("6")
-            desktop.cycle_right_dock("ATTRIBUTE_EDITOR")
-            attribute_editor.refresh_attribute_editor()
+            desktop.apply_workspace_layout("Lookdev / Hypershade")
+            shelf.refresh_top_shelf_status()
             outliner.refresh_outliner()
             desktop.set_command_feedback(
-                "cycle_right_dock('ATTRIBUTE_EDITOR') | set_maya_viewport_shading('6')",
-                "Result: Attribute Editor (pCylinder_HeroMech -> aiStandardSurface_HeroTeal) • EEVEE [6]",
+                "apply_workspace_layout('Lookdev / Hypershade') | set_bottom_node_graph_split(True, 'SHADER')",
+                "Result: Lookdev / Hypershade Workspace • Top 3D Viewport (EEVEE) + Bottom ShaderNodeTree Graph",
             )
-            _frame_viewport_camera(dist=4.9)
+            _frame_viewport_camera(dist=4.7)
             _stage = 4
-            return 0.50
+            return 0.55
 
         if _stage == 4:
-            # Capture Shot 3: Docked Attribute Editor + DAG Outliner + EEVEE Lookdev
+            # Capture Shot 3: Multi-Pane Lookdev / Hypershade Workspace (Top EEVEE + Bottom Shader Graph + Right Hypershade)
             _hide_native_blender_viewport_bars()
             _composite_and_save(SHOT_3_NAME)
             _results["screenshots"]["attribute_editor_outliner"] = str(AGENT_OUT_DIR / SHOT_3_NAME)
+            desktop.apply_workspace_layout("Modeling Standard")
 
             _results["ok"] = bool(
                 (AGENT_OUT_DIR / SHOT_1_NAME).is_file()

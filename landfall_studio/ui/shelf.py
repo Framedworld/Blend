@@ -655,30 +655,63 @@ class MayaShelfWidget:
 
         slay.addStretch(1)
 
-        # 8. Workspace Selector (`Modeling Standard ▾`) + Sidebar Quick Switches
+        # 8. Workspace Layout Selector (`Modeling Standard ▾`) + Core Maya Sidebar Toggles + Tear-Off Windows Menu
+        lbl_ws = QtWidgets.QLabel("Workspace:")
+        lbl_ws.setStyleSheet("color: #8B949E; font-size: 10px; font-weight: 600; background: transparent;")
+        slay.addWidget(lbl_ws)
+
         self.cmb_workspace = QtWidgets.QComboBox()
         self.cmb_workspace.addItems(
-            ["Modeling Standard", "Maya Classic", "Lookdev / Hypershade", "Rigging & Deform", "Pipeline & .ma"]
+            [
+                "Modeling Standard",
+                "Maya Classic",
+                "Lookdev / Hypershade",
+                "FX & Geometry Nodes",
+                "Rigging & Deform",
+                "Sculpt & Remesh Studio",
+                "Pipeline & .ma",
+            ]
         )
-        self.cmb_workspace.setFixedWidth(134)
+        self.cmb_workspace.setFixedWidth(154)
         self.cmb_workspace.setFixedHeight(22)
         self.cmb_workspace.currentIndexChanged.connect(self._on_workspace_preset_changed)
         slay.addWidget(self.cmb_workspace)
 
+        slay.addWidget(self._make_vsep())
+
         for lbl, mode_target, tip in (
             ("Outliner", "OUTLINER", "Toggle Left DAG Outliner"),
             ("Ch Box", "CHANNEL_BOX", "Show Channel Box / Layer Editor (Ctrl+A)"),
-            ("Mod", "MODELING_TOOLKIT", "Show Maya Modeling Toolkit"),
-            ("Hypershade", "HYPERSHADE", "Show Maya Hypershade Material Browser & Lookdev"),
-            ("Shape", "SHAPE_EDITOR", "Show Maya Shape Editor & Skin Weights"),
-            (".ma Ref", "MAYA_INTERCHANGE", "Show Maya .ma/.mb Interchange & Reference Editor"),
-            ("Attr", "ATTRIBUTE_EDITOR", "Show Attribute Editor (Ctrl+A)"),
+            ("Mod TK", "MODELING_TOOLKIT", "Show Maya Modeling Toolkit"),
+            ("Attr Ed", "ATTRIBUTE_EDITOR", "Show Attribute Editor (Ctrl+A)"),
         ):
             b = QtWidgets.QPushButton(lbl)
             b.setFixedHeight(20)
             b.setToolTip(tip)
             b.clicked.connect(lambda _=False, m=mode_target: self._on_workspace_toggle(m))
             slay.addWidget(b)
+
+        self.btn_windows_menu = QtWidgets.QPushButton("Windows ▾")
+        self.btn_windows_menu.setFixedHeight(20)
+        self.btn_windows_menu.setToolTip("Dock or Tear Off Specialized Editors (Hypershade, Shape Editor, .ma Reference, Node Graph)")
+        win_menu = QtWidgets.QMenu(self.btn_windows_menu)
+        style.apply_studio_style(win_menu)
+        for m_lbl, m_mode, is_tear_off in (
+            ("↗ Tear Off Hypershade Window", "HYPERSHADE", True),
+            ("↗ Tear Off Shape & Skin Window", "SHAPE_EDITOR", True),
+            ("↗ Tear Off .ma Reference Window", "MAYA_INTERCHANGE", True),
+            ("↗ Tear Off Tool Settings Window", "TOOL_SETTINGS", True),
+            ("Dock Hypershade to Sidebar", "HYPERSHADE", False),
+            ("Dock Shape & Skin to Sidebar", "SHAPE_EDITOR", False),
+            ("Dock .ma Reference to Sidebar", "MAYA_INTERCHANGE", False),
+        ):
+            act = win_menu.addAction(m_lbl)
+            if is_tear_off:
+                act.triggered.connect(lambda _=False, md=m_mode: self._tear_off_from_menu(md))
+            else:
+                act.triggered.connect(lambda _=False, md=m_mode: self._on_workspace_toggle(md))
+        self.btn_windows_menu.setMenu(win_menu)
+        slay.addWidget(self.btn_windows_menu)
 
         vlay.addWidget(status_bar)
 
@@ -738,15 +771,8 @@ class MayaShelfWidget:
     def _on_workspace_preset_changed(self, idx: int) -> None:
         from . import desktop
 
-        preset_map = {
-            0: "CHANNEL_BOX",
-            1: "CHANNEL_BOX",
-            2: "HYPERSHADE",
-            3: "SHAPE_EDITOR",
-            4: "MAYA_INTERCHANGE",
-        }
-        if idx in preset_map:
-            desktop.cycle_right_dock(preset_map[idx])
+        preset_text = self.cmb_workspace.itemText(idx)
+        desktop.apply_workspace_layout(preset_text)
 
     def _set_component_mode(self, mode_id: str) -> None:
         import bpy
@@ -771,6 +797,11 @@ class MayaShelfWidget:
         else:
             ts.use_snap = True
             ts.snap_elements = {snap_elem}
+
+    def _tear_off_from_menu(self, mode_target: str) -> None:
+        from . import right_dock
+
+        right_dock.tear_off_panel(mode_target)
 
     def _on_workspace_toggle(self, target: str) -> None:
         from . import desktop

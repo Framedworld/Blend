@@ -465,34 +465,72 @@ def get_object_inputs(obj: Any) -> List[Dict[str, Any]]:
         except Exception:
             pass
 
-    # 2. Active Blender modifiers mapped honestly as construction inputs
+    # 2. Active Blender modifiers (including Geometry Nodes socket inputs!) mapped as construction inputs
     for mod in getattr(obj, "modifiers", ()):
         mtype = getattr(mod, "type", "")
-        attr_specs = MODIFIER_EXPOSED_ATTRS.get(mtype, ())
         attrs = []
-        for prop_name, label, atype in attr_specs:
-            if hasattr(mod, prop_name):
-                raw_val = getattr(mod, prop_name)
-                if atype == "angle":
-                    val = round(math.degrees(float(raw_val)), 4)
-                elif atype == "float":
-                    val = round(float(raw_val), 4)
-                else:
+        if mtype == "NODES" and getattr(mod, "node_group", None) is not None:
+            ng = mod.node_group
+            iface = getattr(ng, "interface", None)
+            for item in getattr(iface, "items_tree", ()):
+                if getattr(item, "item_type", "") != "SOCKET" or getattr(item, "in_out", "") != "INPUT":
+                    continue
+                stype = str(getattr(item, "socket_type", ""))
+                if stype == "NodeSocketGeometry":
+                    continue
+                ident = str(getattr(item, "identifier", ""))
+                label = str(getattr(item, "name", ident))
+                if not ident:
+                    continue
+                raw_val = _get_gn_socket_value(mod, ident, getattr(item, "default_value", 0.0))
+                if "Int" in stype or isinstance(raw_val, int) and not isinstance(raw_val, bool):
+                    atype = "int"
                     val = int(raw_val)
+                elif "Bool" in stype or isinstance(raw_val, bool):
+                    atype = "int"
+                    val = 1 if bool(raw_val) else 0
+                elif hasattr(raw_val, "__len__") and not isinstance(raw_val, (str, bytes)):
+                    continue
+                else:
+                    atype = "float"
+                    try:
+                        val = round(float(raw_val), 4)
+                    except Exception:
+                        val = 0.0
                 attrs.append(
                     {
-                        "name": prop_name,
+                        "name": ident,
                         "label": label,
                         "value": val,
                         "type": atype,
                         "editable": not is_datablock_linked(obj),
                     }
                 )
+        else:
+            attr_specs = MODIFIER_EXPOSED_ATTRS.get(mtype, ())
+            for prop_name, label, atype in attr_specs:
+                if hasattr(mod, prop_name):
+                    raw_val = getattr(mod, prop_name)
+                    if atype == "angle":
+                        val = round(math.degrees(float(raw_val)), 4)
+                    elif atype == "float":
+                        val = round(float(raw_val), 4)
+                    else:
+                        val = int(raw_val)
+                    attrs.append(
+                        {
+                            "name": prop_name,
+                            "label": label,
+                            "value": val,
+                            "type": atype,
+                            "editable": not is_datablock_linked(obj),
+                        }
+                    )
         nodes.append(
             {
                 "node_name": mod.name,
-                "node_type": mtype,
-                "kind": "modifier",
+                "node_type": "GEOMETRY_NODES" if mtype == "NODES" else mtype,
+                "kind": "geometry_nodes" if mtype == "NODES" else "modifier",
                 "show_viewport": bool(getattr(mod, "show_viewport", True)),
                 "linked": is_datablock_linked(obj),
                 "editable": not is_datablock_linked(obj),
@@ -503,13 +541,118 @@ def get_object_inputs(obj: Any) -> List[Dict[str, Any]]:
     return nodes
 
 
+def _get_gn_socket_value(mod: Any, ident: str, default: Any = 0.0) -> Any:
+    """Read a Geometry Nodes socket value on Blender 5.2 (`mod.properties.inputs.<ident>.value`) or Blender 4.x (`mod[ident]`)."""
+    try:
+        props = getattr(mod, "properties", None)
+        inps = getattr(props, "inputs", None) if props is not None else None
+        if inps is not None and hasattr(inps, ident):
+            slot = getattr(inps, ident)
+            if hasattr(slot, "value"):
+                return slot.value
+    except Exception:
+        pass
+    try:
+        return mod[ident]
+    except Exception:
+        return default
+
+
+def _set_gn_socket_value(mod: Any, ident: str, value: Any) -> bool:
+    """Write a Geometry Nodes socket value on Blender 5.2 (`mod.properties.inputs.<ident>.value`) or Blender 4.x (`mod[ident]`)."""
+    try:
+        props = getattr(mod, "properties", None)
+        inps = getattr(props, "inputs", None) if props is not None else None
+        if inps is not None and hasattr(inps, ident):
+            slot = getattr(inps, ident)
+            if hasattr(slot, "value"):
+                slot.value = value
+                return True
+    except Exception:
+        pass
+    try:
+        mod[ident] = value
+        return True
+    except Exception:
+        return False
+
+
+def ensure_procedural_geonodes_modifier(
+    obj: Any = None,
+    name: str = "geoNodes_Procedural1",
+) -> Dict[str, Any]:
+    """Create or update a Blender 5.2 Geometry Nodes modifier with exposed procedural sockets (`Subdivide_Level`, `Inflate_Offset`, `Crease_Sharpness`) for Maya `Channel Box -> INPUTS`."""
+    import bpy
+
+    target = _resolve_obj(obj) or getattr(bpy.context.view_layer.objects, "active", None)
+    if target is None or getattr(target, "type", "") != "MESH":
+        return {"ok": False, "error": "Active mesh object required for Geometry Nodes"}
+
+    mod = target.modifiers.get(name)
+    if mod is None or mod.type != "NODES":
+        mod = target.modifiers.new(name=name, type="NODES")
+
+    ng_name = f"{name}_Group"
+    ng = bpy.data.node_groups.get(ng_name)
+    if ng is None:
+        ng = bpy.data.node_groups.new(name=ng_name, type="GeometryNodeTree")
+        iface = ng.interface
+        iface.new_socket(name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+        iface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+
+        s_sub = iface.new_socket(name="Subdivide Level", in_out="INPUT", socket_type="NodeSocketInt")
+        s_sub.default_value = 1
+        s_sub.min_value = 0
+        s_sub.max_value = 4
+
+        s_inf = iface.new_socket(name="Surface Offset", in_out="INPUT", socket_type="NodeSocketFloat")
+        s_inf.default_value = 0.04
+        s_inf.min_value = -1.0
+        s_inf.max_value = 1.0
+
+        s_crs = iface.new_socket(name="Edge Crease", in_out="INPUT", socket_type="NodeSocketFloat")
+        s_crs.default_value = 0.25
+        s_crs.min_value = 0.0
+        s_crs.max_value = 1.0
+
+        n_in = ng.nodes.new("NodeGroupInput")
+        n_in.location = (-360, 0)
+        n_sub = ng.nodes.new("GeometryNodeSubdivisionSurface")
+        n_sub.location = (-120, 40)
+        n_out = ng.nodes.new("NodeGroupOutput")
+        n_out.location = (160, 0)
+
+        ng.links.new(n_in.outputs[0], n_sub.inputs["Mesh"])
+        if len(n_in.outputs) > 1 and "Level" in n_sub.inputs:
+            ng.links.new(n_in.outputs[1], n_sub.inputs["Level"])
+        if len(n_in.outputs) > 3 and "Edge Crease" in n_sub.inputs:
+            ng.links.new(n_in.outputs[3], n_sub.inputs["Edge Crease"])
+        ng.links.new(n_sub.outputs["Mesh"], n_out.inputs[0])
+
+    mod.node_group = ng
+    # Initialize socket defaults on modifier instance
+    for item in getattr(ng.interface, "items_tree", ()):
+        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "INPUT":
+            ident = getattr(item, "identifier", "")
+            if ident and getattr(item, "socket_type", "") != "NodeSocketGeometry":
+                _set_gn_socket_value(mod, ident, getattr(item, "default_value", 0))
+    target.update_tag()
+    return {
+        "ok": True,
+        "object": target.name,
+        "modifier": mod.name,
+        "node_group": ng.name,
+        "inputs": get_object_inputs(target),
+    }
+
+
 def set_object_input_attribute(
     obj: Any,
     node_name: str,
     attr_name: str,
     value: Any,
 ) -> Dict[str, Any]:
-    """Mutate an `INPUTS` attribute (`polyCube1.width`, `polySphere1.subdivisions_x`, `Bevel.segments`, etc.) and update live geometry."""
+    """Mutate an `INPUTS` attribute (`polyCube1.width`, `polySphere1.subdivisions_x`, `Bevel.segments`, or `Geometry Nodes` socket) and update live geometry."""
     obj = _resolve_obj(obj)
     if obj is None:
         return {"ok": False, "error": "No object specified"}
@@ -578,8 +721,33 @@ def set_object_input_attribute(
                 "face_count": len(me.polygons),
             }
 
-    # Check Blender modifiers
+    # Check Blender modifiers (including Geometry Nodes socket inputs)
     mod = getattr(obj, "modifiers", {}).get(clean_node)
+    if mod is not None and getattr(mod, "type", "") == "NODES" and getattr(mod, "node_group", None) is not None:
+        iface = getattr(mod.node_group, "interface", None)
+        for item in getattr(iface, "items_tree", ()):
+            if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "INPUT":
+                ident = str(getattr(item, "identifier", ""))
+                sname = str(getattr(item, "name", ""))
+                if attr_name in (ident, sname):
+                    stype = str(getattr(item, "socket_type", ""))
+                    if "Int" in stype:
+                        new_val = int(round(float(value)))
+                    elif "Bool" in stype:
+                        new_val = bool(int(round(float(value))))
+                    else:
+                        new_val = float(value)
+                    _set_gn_socket_value(mod, ident, new_val)
+                    obj.update_tag()
+                    return {
+                        "ok": True,
+                        "kind": "geometry_nodes",
+                        "node_name": mod.name,
+                        "attr_name": ident,
+                        "label": sname,
+                        "value": _get_gn_socket_value(mod, ident, new_val),
+                    }
+
     if mod is not None and hasattr(mod, attr_name):
         mtype = getattr(mod, "type", "")
         attr_specs = dict((a, t) for a, _, t in MODIFIER_EXPOSED_ATTRS.get(mtype, ()))
@@ -1127,19 +1295,25 @@ class MayaChannelBoxExtensionWidget:
         shape_edit_row.addWidget(self.txt_shape_name)
         hlay.addLayout(shape_edit_row)
 
-        # INPUTS Header + Action Buttons
+        # INPUTS Header + Action Buttons (+ GeoNodes & Delete History)
         inputs_hdr = QtWidgets.QFrame()
         inputs_hdr.setObjectName("MayaSectionHeader")
         in_row = QtWidgets.QHBoxLayout(inputs_hdr)
         in_row.setContentsMargins(6, 2, 4, 2)
+        in_row.setSpacing(4)
         lbl_in = QtWidgets.QLabel("INPUTS")
         lbl_in.setObjectName("MayaSectionTitle")
+        self.btn_add_geonodes = QtWidgets.QPushButton("+ GeoNodes")
+        self.btn_add_geonodes.setToolTip("Add procedural Blender Geometry Nodes network with exposed sockets in INPUTS")
+        self.btn_add_geonodes.setFixedHeight(18)
+        self.btn_add_geonodes.clicked.connect(self._on_add_geonodes_clicked)
         self.btn_del_history = QtWidgets.QPushButton("Delete History")
         self.btn_del_history.setToolTip("Apply modifiers and clear parametric creation history (Alt+Shift+D)")
         self.btn_del_history.setFixedHeight(18)
         self.btn_del_history.clicked.connect(self._on_delete_history_clicked)
         in_row.addWidget(lbl_in)
         in_row.addStretch(1)
+        in_row.addWidget(self.btn_add_geonodes)
         in_row.addWidget(self.btn_del_history)
         hlay.addWidget(inputs_hdr)
 
@@ -1299,6 +1473,10 @@ class MayaChannelBoxExtensionWidget:
             }
 
             class _MayaChannelAxisDelegate(QtWidgets.QStyledItemDelegate):
+                def sizeHint(self, option, index):
+                    base = super().sizeHint(option, index)
+                    return QtCore.QSize(max(116, base.width() + 34), max(20, base.height()))
+
                 def paint(self, painter, option, index) -> None:
                     raw = str(index.data(QtCore.Qt.DisplayRole) or "").strip()
                     if not raw:
@@ -1560,6 +1738,10 @@ class MayaChannelBoxExtensionWidget:
         if active is not None:
             set_object_input_attribute(active, str(node_name), str(attr_name), item.text(1))
             self.refresh()
+
+    def _on_add_geonodes_clicked(self) -> None:
+        ensure_procedural_geonodes_modifier()
+        self.refresh()
 
     def _on_delete_history_clicked(self) -> None:
         import bpy

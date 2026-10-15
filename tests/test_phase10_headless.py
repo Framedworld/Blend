@@ -23,7 +23,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import landfall_studio
 from landfall_studio import continuity, keymaps, modeling, ui, viewport
-from landfall_studio.ui import desktop, shelf, style
+from landfall_studio.ui import channel_box_ext, desktop, right_dock, shelf, style
 from landfall_studio.viewport import marking_menus
 
 
@@ -148,6 +148,60 @@ class TestPhase10ModernMayaPolishHeadless(unittest.TestCase):
         scan = keymaps.scan_keymap_conflicts()
         self.assertTrue(scan["clean"])
         self.assertEqual(scan["protected_context_leaks"], [])
+
+    def test_05_workspace_layouts_tear_off_and_geonodes_inputs(self):
+        """Verify Geometry Nodes socket introspection in Channel Box INPUTS, Tear-Off / Redock windows, and Multi-Pane Workspace Layouts."""
+        from landfall_studio.ui import right_dock
+
+        res_prim = channel_box_ext.create_maya_primitive("CUBE", width=2.0, height=2.0, depth=2.0)
+        self.assertTrue(res_prim["ok"])
+        cube = bpy.data.objects.get(res_prim["object_name"])
+
+        # 1. Geometry Nodes modifier with exposed sockets in Channel Box INPUTS
+        gn_res = channel_box_ext.ensure_procedural_geonodes_modifier(cube, name="geoNodes_Test1")
+        self.assertTrue(gn_res["ok"])
+        inputs = channel_box_ext.get_object_inputs(cube)
+        gn_node = next((n for n in inputs if n["kind"] == "geometry_nodes"), None)
+        self.assertIsNotNone(gn_node)
+        self.assertEqual(gn_node["node_type"], "GEOMETRY_NODES")
+        self.assertGreaterEqual(len(gn_node["attributes"]), 3)
+
+        # Mutate a Geometry Nodes socket via set_object_input_attribute
+        edit_res = channel_box_ext.set_object_input_attribute(
+            cube, "geoNodes_Test1", "Subdivide Level", 2
+        )
+        self.assertTrue(edit_res["ok"])
+        self.assertEqual(edit_res["value"], 2)
+
+        # 2. Tear-Off & Redock Panel Manager
+        tear_res = right_dock.tear_off_panel("TOOL_SETTINGS", x=180, y=140, width=360, height=480)
+        self.assertTrue(tear_res["ok"])
+        self.assertTrue(tear_res["floating"])
+        self.assertEqual(len(right_dock.list_torn_off_panels()), 1)
+        redock_res = right_dock.redock_panel("TOOL_SETTINGS")
+        self.assertTrue(redock_res["ok"])
+        self.assertEqual(len(right_dock.list_torn_off_panels()), 0)
+
+        # 3. Multi-Pane Workspace Layouts & Context-Aware Spine Tabs
+        ws_lookdev = desktop.apply_workspace_layout("Lookdev / Hypershade")
+        self.assertTrue(ws_lookdev["ok"])
+        self.assertEqual(ws_lookdev["right_dock_mode"], "HYPERSHADE")
+        self.assertTrue(ws_lookdev["bottom_node_graph"]["open"])
+        self.assertEqual(ws_lookdev["bottom_node_graph"]["ui_type"], "ShaderNodeTree")
+        self.assertLessEqual(len(ws_lookdev["visible_spine_tabs"]), 4)
+
+        ws_fx = desktop.apply_workspace_layout("FX & Geometry Nodes")
+        self.assertTrue(ws_fx["ok"])
+        self.assertEqual(ws_fx["bottom_node_graph"]["ui_type"], "GeometryNodeTree")
+
+        ws_std = desktop.apply_workspace_layout("Modeling Standard")
+        self.assertTrue(ws_std["ok"])
+        self.assertFalse(ws_std["bottom_node_graph"]["open"])
+        self.assertEqual(ws_std["right_dock_mode"], "CHANNEL_BOX")
+        self.assertEqual(
+            set(ws_std["visible_spine_tabs"]),
+            {"CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS"},
+        )
 
 
 if __name__ == "__main__":

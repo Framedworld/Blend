@@ -1,0 +1,8 @@
+{
+  "suite": "T10-1_headless_modern_maya_polish",
+  "version": "1.0.0",
+  "tests_run": 5,
+  "failures": 0,
+  "errors": 0,
+  "passed": true
+}

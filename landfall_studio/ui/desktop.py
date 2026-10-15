@@ -642,6 +642,208 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
     return info
 
 
+_tracked_bottom_graph_area: Any = None
+_bottom_graph_state: Dict[str, Any] = {
+    "open": False,
+    "graph_type": "NONE",
+    "ui_type": "",
+}
+_active_workspace_layout: str = "Modeling Standard"
+
+
+def get_bottom_node_graph_state() -> Dict[str, Any]:
+    return dict(_bottom_graph_state)
+
+
+def get_active_workspace_layout() -> str:
+    return _active_workspace_layout
+
+
+def set_bottom_node_graph_split(
+    enable: bool = True,
+    graph_type: str = "SHADER",
+    height_ratio: float = 0.35,
+) -> Dict[str, Any]:
+    """Split or close a bottom native Blender Node Graph (`ShaderNodeTree` or `GeometryNodeTree`) below the 3D Viewport."""
+    global _tracked_bottom_graph_area, _bottom_graph_state
+    import bpy
+    import blendertk as btk
+    from blendertk.ui_utils._ui_utils import _UiUtilsInternal
+
+    gtype = (graph_type or "SHADER").upper()
+    ui_type = "ShaderNodeTree" if gtype == "SHADER" else "GeometryNodeTree"
+
+    rdock = _get_right_dock()
+    if rdock._host_container is not None and hasattr(rdock._host_container, "btn_split_graph"):
+        rdock._host_container.btn_split_graph.blockSignals(True)
+        rdock._host_container.btn_split_graph.setChecked(bool(enable))
+        rdock._host_container.btn_split_graph.blockSignals(False)
+
+    if bpy.app.background:
+        _bottom_graph_state = {
+            "ok": True,
+            "open": bool(enable),
+            "graph_type": gtype if enable else "NONE",
+            "ui_type": ui_type if enable else "",
+        }
+        return dict(_bottom_graph_state)
+
+    window = btk.main_window()
+    if window is None or window.screen is None:
+        return {"ok": False, "open": False}
+
+    # Check if tracked bottom graph area is still valid
+    valid_tracked = None
+    if _tracked_bottom_graph_area is not None:
+        for a in window.screen.areas:
+            try:
+                if a.as_pointer() == _tracked_bottom_graph_area.as_pointer():
+                    valid_tracked = a
+                    break
+            except Exception:
+                pass
+
+    if not enable:
+        if valid_tracked is not None:
+            try:
+                btk.close_area(window, valid_tracked)
+            except Exception:
+                pass
+        _tracked_bottom_graph_area = None
+        _bottom_graph_state = {
+            "ok": True,
+            "open": False,
+            "graph_type": "NONE",
+            "ui_type": "",
+        }
+        return dict(_bottom_graph_state)
+
+    if valid_tracked is None:
+        v3ds = [a for a in window.screen.areas if a.type == "VIEW_3D"]
+        if not v3ds:
+            return {"ok": False, "open": False}
+        target_v3d = max(v3ds, key=lambda a: a.width * a.height)
+        before_ptrs = {a.as_pointer() for a in window.screen.areas}
+        factor = max(0.22, min(0.50, float(height_ratio)))
+        try:
+            with bpy.context.temp_override(
+                window=window,
+                screen=window.screen,
+                area=target_v3d,
+                region=_UiUtilsInternal._window_region(target_v3d),
+            ):
+                res = bpy.ops.screen.area_split(direction="HORIZONTAL", factor=factor)
+        except Exception:
+            res = {"CANCELLED"}
+        if res == {"FINISHED"}:
+            candidates = [a for a in window.screen.areas if a.as_pointer() not in before_ptrs] + [target_v3d]
+            valid_tracked = min(candidates, key=lambda a: a.y)
+            _tracked_bottom_graph_area = valid_tracked
+
+    if valid_tracked is not None:
+        try:
+            valid_tracked.ui_type = ui_type
+            for sp in valid_tracked.spaces:
+                if hasattr(sp, "show_region_ui"):
+                    sp.show_region_ui = False
+                if hasattr(sp, "show_region_toolbar"):
+                    sp.show_region_toolbar = False
+                if gtype == "SHADER" and hasattr(sp, "shader_type"):
+                    sp.shader_type = "OBJECT"
+            for r in valid_tracked.regions:
+                r.tag_redraw()
+        except Exception:
+            pass
+
+    _bottom_graph_state = {
+        "ok": valid_tracked is not None,
+        "open": valid_tracked is not None,
+        "graph_type": gtype,
+        "ui_type": ui_type,
+    }
+    return dict(_bottom_graph_state)
+
+
+def apply_workspace_layout(preset_name: str) -> Dict[str, Any]:
+    """Configure a full multi-pane Maya × Blender Workspace Layout (`Modeling Standard`, `Maya Classic`, `Lookdev / Hypershade`, `FX & Geometry Nodes`, `Rigging & Deform`, `Sculpt & Remesh Studio`, `Pipeline & .ma`)."""
+    global _active_workspace_layout
+    from .. import continuity
+    from . import channel_box_ext, right_dock, shelf
+
+    preset = (preset_name or "Modeling Standard").strip()
+    _active_workspace_layout = preset
+
+    rdock = _get_right_dock()
+    host = rdock._ensure_host_container()
+    host.set_workspace_spine_preset(preset)
+
+    split_info = {"open": False, "graph_type": "NONE", "ui_type": ""}
+    target_right = "CHANNEL_BOX"
+    target_shelf_idx = 1
+
+    if preset == "Lookdev / Hypershade":
+        target_right = "HYPERSHADE"
+        target_shelf_idx = 3  # UV Shading
+        continuity.set_maya_viewport_shading("7")
+        cycle_right_dock("HYPERSHADE")
+        split_info = set_bottom_node_graph_split(enable=True, graph_type="SHADER", height_ratio=0.34)
+    elif preset == "FX & Geometry Nodes":
+        target_right = "CHANNEL_BOX"
+        target_shelf_idx = 5  # FX / Nodes
+        channel_box_ext.ensure_procedural_geonodes_modifier()
+        cycle_right_dock("CHANNEL_BOX")
+        split_info = set_bottom_node_graph_split(enable=True, graph_type="GEOMETRY_NODES", height_ratio=0.34)
+    elif preset == "Rigging & Deform":
+        target_right = "SHAPE_EDITOR"
+        target_shelf_idx = 4  # Deform Rigging
+        split_info = set_bottom_node_graph_split(enable=False)
+        cycle_right_dock("SHAPE_EDITOR")
+    elif preset == "Sculpt & Remesh Studio":
+        target_right = "TOOL_SETTINGS"
+        target_shelf_idx = 5  # FX / Nodes
+        split_info = set_bottom_node_graph_split(enable=False)
+        cycle_right_dock("TOOL_SETTINGS")
+    elif preset == "Pipeline & .ma":
+        target_right = "MAYA_INTERCHANGE"
+        target_shelf_idx = 6  # Pipeline
+        split_info = set_bottom_node_graph_split(enable=False)
+        cycle_right_dock("MAYA_INTERCHANGE")
+    else:
+        target_right = "CHANNEL_BOX"
+        target_shelf_idx = 1  # Modeling
+        split_info = set_bottom_node_graph_split(enable=False)
+        cycle_right_dock("CHANNEL_BOX")
+
+    host.set_workspace_spine_preset(preset)
+    for sh in getattr(shelf, "_shelf_instances", ()):
+        try:
+            if target_shelf_idx < sh.tabs.count():
+                sh.tabs.setCurrentIndex(target_shelf_idx)
+            idx_cmb = sh.cmb_workspace.findText(preset)
+            if idx_cmb >= 0 and sh.cmb_workspace.currentIndex() != idx_cmb:
+                sh.cmb_workspace.blockSignals(True)
+                sh.cmb_workspace.setCurrentIndex(idx_cmb)
+                sh.cmb_workspace.blockSignals(False)
+        except Exception:
+            pass
+
+    visible_spine_tabs = [
+        k for k, btn in host.edge_tabs.items() if not btn.isHidden()
+    ]
+    set_command_feedback(
+        f"apply_workspace_layout('{preset}')",
+        f"Layout: {preset} • Right Dock: {target_right} • Spine Tabs: {len(visible_spine_tabs)} • Split Graph: {split_info.get('graph_type', 'NONE')}",
+    )
+    return {
+        "ok": True,
+        "workspace_layout": preset,
+        "right_dock_mode": rdock.mode,
+        "visible_spine_tabs": visible_spine_tabs,
+        "bottom_node_graph": split_info,
+        "torn_off_panels": [p["mode"] for p in right_dock.list_torn_off_panels()],
+    }
+
+
 def _update_registry_entry(
     panel_id: str,
     widget: Any,

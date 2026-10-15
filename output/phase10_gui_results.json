@@ -1,0 +1,76 @@
+{
+  "ok": true,
+  "version": "1.0.0",
+  "design_system": {
+    "ok": true,
+    "dpi_scale": 1.0,
+    "scaled_metrics": {
+      "top_shelf_h": 104.0,
+      "viewport_strip_h": 26.0,
+      "channel_row_h": 21.0,
+      "marking_menu_row_h": 24.0
+    },
+    "theme_applied": true,
+    "saved_theme_attr_count": 23,
+    "qss_length": 7336,
+    "max_shelf_label_len": 10,
+    "clipped_shelf_labels": []
+  },
+  "eevee_viewport_20": {
+    "ok": true,
+    "maya_mode": "7",
+    "maya_id": "ALL_LIGHTS",
+    "maya_label": "Use All Lights [7]",
+    "blender_shading_type": "MATERIAL",
+    "renderer_engine": "BLENDER_EEVEE",
+    "renderer_label": "Viewport 2.0 (EEVEE)",
+    "use_scene_lights": true,
+    "wire_on_shaded": true,
+    "xray": false,
+    "isolated": false,
+    "eevee_ssao": true,
+    "eevee_shadows": true,
+    "eevee_raytracing": true,
+    "eevee_msaa": 16
+  },
+  "marking_menu_state": {
+    "open": true,
+    "menu_mode": "TOOL",
+    "list": "tool_object",
+    "hot": [
+      "radial",
+      0
+    ],
+    "origin": [
+      464.0,
+      536.0
+    ],
+    "cursor": [
+      316.0,
+      536.0
+    ],
+    "rect_count": 18,
+    "has_draw_handler": true
+  },
+  "screenshots": {
+    "studio_eevee_desktop": "C:\\Users\\mattk\\Documents\\Landfall\\Landfall_Studio_Agent_Pack\\landfall_studio_agent_pack\\output\\phase10_modern_maya_studio_eevee_gui.png",
+    "marking_menu_caddy": "C:\\Users\\mattk\\Documents\\Landfall\\Landfall_Studio_Agent_Pack\\landfall_studio_agent_pack\\output\\phase10_marking_menu_caddy_viewport_gui.png",
+    "attribute_editor_outliner": "C:\\Users\\mattk\\Documents\\Landfall\\Landfall_Studio_Agent_Pack\\landfall_studio_agent_pack\\output\\phase10_attribute_editor_outliner_gui.png"
+  },
+  "composited_docks": [
+    "top_shelf",
+    "left_outliner",
+    "right_sidebar",
+    "time_slider"
+  ],
+  "desktop_restore": {
+    "ok": true,
+    "areas_before": 4,
+    "areas_after": 5,
+    "right_dock_mode": "CHANNEL_BOX",
+    "top_shelf_docked": true,
+    "left_outliner_docked": true,
+    "time_slider_docked": true,
+    "hotkey_filter_installed": true
+  }
+}

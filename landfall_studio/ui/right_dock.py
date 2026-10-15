@@ -98,13 +98,195 @@ def _create_rotated_edge_tab(
     return _MayaRotatedEdgeTab()
 
 
+PANEL_TITLES = {
+    "CHANNEL_BOX": "CHANNEL BOX / LAYER EDITOR",
+    "MODELING_TOOLKIT": "MAYA MODELING TOOLKIT",
+    "HYPERSHADE": "HYPERSHADE • MATERIAL BROWSER",
+    "SHAPE_EDITOR": "SHAPE & SKIN WEIGHT EDITOR",
+    "MAYA_INTERCHANGE": "MAYA .MA / .MB REFERENCE",
+    "ATTRIBUTE_EDITOR": "ATTRIBUTE EDITOR",
+    "TOOL_SETTINGS": "TOOL SETTINGS • OPTION BOX",
+}
+
+WORKSPACE_SPINE_TABS = {
+    "Modeling Standard": ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS"),
+    "Maya Classic": ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR"),
+    "Lookdev / Hypershade": ("HYPERSHADE", "ATTRIBUTE_EDITOR", "CHANNEL_BOX"),
+    "FX & Geometry Nodes": ("CHANNEL_BOX", "ATTRIBUTE_EDITOR", "MODELING_TOOLKIT"),
+    "Rigging & Deform": ("SHAPE_EDITOR", "CHANNEL_BOX", "ATTRIBUTE_EDITOR"),
+    "Sculpt & Remesh Studio": ("TOOL_SETTINGS", "MODELING_TOOLKIT", "CHANNEL_BOX"),
+    "Pipeline & .ma": ("MAYA_INTERCHANGE", "CHANNEL_BOX", "ATTRIBUTE_EDITOR"),
+}
+
+_tear_off_windows: dict[str, Any] = {}
+
+
+def _create_tear_off_panel_widget(mode: str) -> Any:
+    """Create a standalone instance of an editor widget for a floating Maya Tear-Off window."""
+    m = (mode or "TOOL_SETTINGS").upper()
+    if m == "HYPERSHADE":
+        w = hypershade_panel.create_hypershade_widget()
+        w.refresh_from_scene()
+        return w
+    if m == "SHAPE_EDITOR":
+        w = shape_editor.create_shape_editor_widget()
+        w.refresh_from_scene()
+        return w
+    if m == "MAYA_INTERCHANGE":
+        w = interchange_panel.create_interchange_widget()
+        w.refresh_from_scene()
+        return w
+    if m == "MODELING_TOOLKIT":
+        w = modeling_toolkit.create_modeling_toolkit_widget()
+        w.refresh_from_scene()
+        return w
+    if m == "ATTRIBUTE_EDITOR":
+        ctrl = attribute_editor.MayaAttributeEditorWidget()
+        ctrl.refresh()
+        ctrl.widget._lf_ctrl = ctrl
+        return ctrl.widget
+    ctrl = tool_settings.MayaToolSettingsWidget()
+    ctrl.refresh()
+    ctrl.widget._lf_ctrl = ctrl
+    return ctrl.widget
+
+
+def tear_off_panel(mode: str, x: int = 240, y: int = 135, width: int = 380, height: int = 540) -> dict[str, Any]:
+    """Undock/tear off `mode` into a standalone floating Maya Tear-Off window with a `[↙ Dock to Sidebar]` header."""
+    from qtpy import QtCore, QtWidgets
+    import blendertk as btk
+    from blendertk.ui_utils.blender_window import BlenderWindow
+    from . import desktop
+
+    desktop.ensure_ui_handler()
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        app = QtWidgets.QApplication([])
+
+    m = (mode or "TOOL_SETTINGS").upper()
+    title = PANEL_TITLES.get(m, m)
+
+    if m in _tear_off_windows and _tear_off_windows[m] is not None:
+        win = _tear_off_windows[m]
+        try:
+            win.show()
+            win.raise_()
+            return {"ok": True, "mode": m, "title": title, "floating": True, "reused": True}
+        except Exception:
+            _tear_off_windows.pop(m, None)
+
+    win = QtWidgets.QFrame(None, QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+    win.setObjectName("MayaTearOffWindow")
+    style.apply_studio_style(win)
+    win.setStyleSheet(
+        win.styleSheet()
+        + "\nQFrame#MayaTearOffWindow { background-color: #1E2126; border: 1px solid #38A3D8; border-radius: 3px; }"
+    )
+
+    vlay = QtWidgets.QVBoxLayout(win)
+    vlay.setContentsMargins(1, 1, 1, 1)
+    vlay.setSpacing(0)
+
+    hdr = QtWidgets.QFrame()
+    hdr.setObjectName("MayaStatusLine")
+    hdr.setFixedHeight(26)
+    hlay = QtWidgets.QHBoxLayout(hdr)
+    hlay.setContentsMargins(8, 2, 6, 2)
+    hlay.setSpacing(6)
+
+    lbl_grip = QtWidgets.QLabel("⋮⋮")
+    lbl_grip.setStyleSheet("color: #38A3D8; font-weight: 700; font-size: 11px; background: transparent;")
+    hlay.addWidget(lbl_grip)
+
+    lbl_title = QtWidgets.QLabel(f"TEAR-OFF • {title}")
+    lbl_title.setStyleSheet("color: #E6EDF3; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; background: transparent;")
+    hlay.addWidget(lbl_title)
+    hlay.addStretch(1)
+
+    btn_redock = QtWidgets.QPushButton("↙ Dock")
+    btn_redock.setFixedHeight(19)
+    btn_redock.setToolTip("Snap this torn-off editor back into the Right Sidebar Dock")
+    btn_redock.clicked.connect(lambda: redock_panel(m))
+    hlay.addWidget(btn_redock)
+
+    btn_close = QtWidgets.QPushButton("✕")
+    btn_close.setFixedSize(20, 19)
+    btn_close.clicked.connect(lambda: close_tear_off_panel(m))
+    hlay.addWidget(btn_close)
+
+    vlay.addWidget(hdr)
+
+    content = _create_tear_off_panel_widget(m)
+    vlay.addWidget(content, 1)
+
+    win.resize(int(width), int(height))
+    win.move(int(x), int(y))
+    try:
+        bwin = btk.main_window()
+        hwnd = BlenderWindow.window_hwnd(bwin) if bwin else None
+        if hwnd:
+            BlenderWindow.set_owner(win, hwnd)
+    except Exception:
+        pass
+    win.show()
+    win.raise_()
+    _tear_off_windows[m] = win
+    return {"ok": True, "mode": m, "title": title, "floating": True, "geometry": (x, y, width, height)}
+
+
+def close_tear_off_panel(mode: str) -> dict[str, Any]:
+    m = (mode or "").upper()
+    win = _tear_off_windows.pop(m, None)
+    if win is not None:
+        try:
+            win.hide()
+            win.deleteLater()
+        except Exception:
+            pass
+    return {"ok": True, "mode": m, "floating": False}
+
+
+def redock_panel(mode: str) -> dict[str, Any]:
+    """Close the floating Tear-Off window for `mode` and dock it into the Right Sidebar."""
+    from . import desktop
+
+    m = (mode or "CHANNEL_BOX").upper()
+    close_tear_off_panel(m)
+    res = desktop.cycle_right_dock(m)
+    return {"ok": True, "mode": m, "floating": False, "dock_result": res}
+
+
+def list_torn_off_panels() -> list[dict[str, Any]]:
+    out = []
+    for m, win in list(_tear_off_windows.items()):
+        if win is not None and win.isVisible():
+            g = win.geometry()
+            out.append(
+                {
+                    "mode": m,
+                    "title": PANEL_TITLES.get(m, m),
+                    "rect": (g.x(), g.y(), g.width(), g.height()),
+                    "widget": win,
+                }
+            )
+    return out
+
+
+def teardown_tear_off_windows() -> None:
+    for m in list(_tear_off_windows.keys()):
+        close_tear_off_panel(m)
+
+
 class _RightSidebarHostWidget:
-    """Frameless Qt container holding the Figma Make vertical rotated edge tab strip + top tab bar + `QStackedWidget`."""
+    """Frameless Qt container holding the Workspace-Aware Vertical Edge Tab Spine + Maya Panel Header Bar + `QStackedWidget`."""
 
     def __init__(self, on_mode_tab_clicked: Callable[[str], None]):
         from qtpy import QtCore, QtWidgets
 
         self._on_mode_tab_clicked = on_mode_tab_clicked
+        self._active_mode = "CHANNEL_BOX"
+        self._active_workspace_preset = "Modeling Standard"
+
         self.root = QtWidgets.QFrame()
         self.root.setObjectName("MayaPanelRoot")
         style.apply_studio_style(self.root)
@@ -113,89 +295,96 @@ class _RightSidebarHostWidget:
         outer_hlay.setContentsMargins(0, 0, 0, 0)
         outer_hlay.setSpacing(0)
 
-        # 1. Figma Make Left-Edge 26px Vertical Rotated Edge Tab Strip
+        # 1. Left-Edge 26px Workspace-Aware Vertical Rotated Edge Tab Spine
         self.edge_strip = QtWidgets.QFrame()
         self.edge_strip.setObjectName("MayaEdgeTabStrip")
         self.edge_strip.setFixedWidth(26)
         elay = QtWidgets.QVBoxLayout(self.edge_strip)
-        elay.setContentsMargins(0, 0, 0, 0)
+        elay.setContentsMargins(0, 0, 0, 4)
         elay.setSpacing(0)
 
         self.edge_tabs = {}
         for label, mkey, h_px in (
-            ("CHANNEL BOX", "CHANNEL_BOX", 96),
-            ("MODELING TOOLKIT", "MODELING_TOOLKIT", 110),
-            ("HYPERSHADE", "HYPERSHADE", 92),
-            ("SHAPE EDITOR", "SHAPE_EDITOR", 92),
-            ("MAYA BRIDGE", "MAYA_INTERCHANGE", 88),
-            ("ATTRIBUTE EDITOR", "ATTRIBUTE_EDITOR", 104),
-            ("TOOL SETTINGS", "TOOL_SETTINGS", 92),
+            ("CHANNEL BOX", "CHANNEL_BOX", 104),
+            ("MODELING TOOLKIT", "MODELING_TOOLKIT", 118),
+            ("HYPERSHADE", "HYPERSHADE", 96),
+            ("SHAPE EDITOR", "SHAPE_EDITOR", 96),
+            ("MAYA BRIDGE", "MAYA_INTERCHANGE", 92),
+            ("ATTRIBUTE EDITOR", "ATTRIBUTE_EDITOR", 112),
+            ("TOOL SETTINGS", "TOOL_SETTINGS", 96),
         ):
             etab = _create_rotated_edge_tab(label, mkey, self._on_mode_tab_clicked, height=h_px)
             self.edge_tabs[mkey] = etab
             elay.addWidget(etab)
+
         elay.addStretch(1)
+
+        # Bottom '+' Overflow / Tear-Off Launcher on the 26px spine
+        self.btn_spine_more = QtWidgets.QPushButton("+")
+        self.btn_spine_more.setFixedSize(22, 22)
+        self.btn_spine_more.setToolTip("Open or Tear Off Specialized Editors (Hypershade, Shape Editor, .ma Bridge, Tool Settings)")
+        self._build_spine_more_menu()
+        elay.addWidget(self.btn_spine_more, 0, QtCore.Qt.AlignHCenter)
+
         outer_hlay.addWidget(self.edge_strip)
 
-        # 2. Right Inspector Column (Header Bar + Compact Tab Strip + QStackedWidget)
+        # 2. Right Inspector Column (Clean Maya Tear-Off Header Bar + QStackedWidget)
         right_col = QtWidgets.QFrame()
         vlay = QtWidgets.QVBoxLayout(right_col)
         vlay.setContentsMargins(0, 0, 0, 0)
         vlay.setSpacing(0)
         outer_hlay.addWidget(right_col, 1)
 
-        # Top Maya Sidebar Tab Bar (Ch Box | Mod TK | Hypershade | Shape | .ma | Attr Ed | Tool)
-        tab_strip = QtWidgets.QFrame()
-        tab_strip.setObjectName("MayaStatusLine")
-        tlay = QtWidgets.QHBoxLayout(tab_strip)
-        tlay.setContentsMargins(2, 2, 2, 2)
-        tlay.setSpacing(2)
+        # Clean Maya Panel Title + Tear-Off / Node Graph Header Bar (replaces the crowded 7-button row!)
+        self.panel_header_bar = QtWidgets.QFrame()
+        self.panel_header_bar.setObjectName("MayaStatusLine")
+        self.panel_header_bar.setFixedHeight(26)
+        hlay = QtWidgets.QHBoxLayout(self.panel_header_bar)
+        hlay.setContentsMargins(8, 2, 6, 2)
+        hlay.setSpacing(5)
 
+        lbl_tear_dots = QtWidgets.QLabel("⋮⋮")
+        lbl_tear_dots.setToolTip("Maya Tear-Off Panel Header — click '↗ Tear Off' to float this editor")
+        lbl_tear_dots.setStyleSheet("color: #38A3D8; font-weight: 700; font-size: 11px; background: transparent;")
+        hlay.addWidget(lbl_tear_dots)
+
+        self.lbl_panel_title = QtWidgets.QLabel("CHANNEL BOX / LAYER EDITOR")
+        self.lbl_panel_title.setStyleSheet(
+            "color: #E6EDF3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px; background: transparent;"
+        )
+        hlay.addWidget(self.lbl_panel_title)
+        hlay.addStretch(1)
+
+        self.btn_split_graph = QtWidgets.QPushButton("⇄ Node Graph")
+        self.btn_split_graph.setCheckable(True)
+        self.btn_split_graph.setFixedHeight(19)
+        self.btn_split_graph.setToolTip("Toggle Bottom Blender Native Node Graph (Shader Editor / Geometry Nodes)")
+        self.btn_split_graph.clicked.connect(self._on_split_graph_clicked)
+        hlay.addWidget(self.btn_split_graph)
+
+        self.btn_tear_off = QtWidgets.QPushButton("↗ Tear Off")
+        self.btn_tear_off.setFixedHeight(19)
+        self.btn_tear_off.setToolTip("Undock active panel into a floating Maya Tear-Off window")
+        self.btn_tear_off.clicked.connect(self._on_tear_off_clicked)
+        hlay.addWidget(self.btn_tear_off)
+
+        vlay.addWidget(self.panel_header_bar)
+
+        # Keep hidden compatibility button references for programmatic inspection
         self.btn_cb = QtWidgets.QPushButton("Ch Box")
         self.btn_cb.setCheckable(True)
-        self.btn_cb.setFixedHeight(21)
-        self.btn_cb.clicked.connect(lambda: self._on_mode_tab_clicked("CHANNEL_BOX"))
-
         self.btn_mtk = QtWidgets.QPushButton("Mod TK")
         self.btn_mtk.setCheckable(True)
-        self.btn_mtk.setFixedHeight(21)
-        self.btn_mtk.clicked.connect(lambda: self._on_mode_tab_clicked("MODELING_TOOLKIT"))
-
         self.btn_hs = QtWidgets.QPushButton("Hypershade")
         self.btn_hs.setCheckable(True)
-        self.btn_hs.setFixedHeight(21)
-        self.btn_hs.setToolTip("Maya Hypershade Material Browser & Shader Graph")
-        self.btn_hs.clicked.connect(lambda: self._on_mode_tab_clicked("HYPERSHADE"))
-
         self.btn_se = QtWidgets.QPushButton("Shape")
         self.btn_se.setCheckable(True)
-        self.btn_se.setFixedHeight(21)
-        self.btn_se.clicked.connect(lambda: self._on_mode_tab_clicked("SHAPE_EDITOR"))
-
         self.btn_mi = QtWidgets.QPushButton(".ma")
         self.btn_mi.setCheckable(True)
-        self.btn_mi.setFixedHeight(21)
-        self.btn_mi.setToolTip("Maya .ma/.mb Interchange & Reference Manager")
-        self.btn_mi.clicked.connect(lambda: self._on_mode_tab_clicked("MAYA_INTERCHANGE"))
-
         self.btn_ae = QtWidgets.QPushButton("Attr Ed")
         self.btn_ae.setCheckable(True)
-        self.btn_ae.setFixedHeight(21)
-        self.btn_ae.clicked.connect(lambda: self._on_mode_tab_clicked("ATTRIBUTE_EDITOR"))
-
         self.btn_ts = QtWidgets.QPushButton("Tool")
         self.btn_ts.setCheckable(True)
-        self.btn_ts.setFixedHeight(21)
-        self.btn_ts.clicked.connect(lambda: self._on_mode_tab_clicked("TOOL_SETTINGS"))
-
-        tlay.addWidget(self.btn_cb, 1)
-        tlay.addWidget(self.btn_mtk, 1)
-        tlay.addWidget(self.btn_hs, 1)
-        tlay.addWidget(self.btn_se, 1)
-        tlay.addWidget(self.btn_mi, 1)
-        tlay.addWidget(self.btn_ae, 1)
-        tlay.addWidget(self.btn_ts, 1)
-        vlay.addWidget(tab_strip)
 
         self.stack = QtWidgets.QStackedWidget()
         vlay.addWidget(self.stack, 1)
@@ -225,6 +414,55 @@ class _RightSidebarHostWidget:
         self.stack.addWidget(self.hs_widget)
 
         self._attached_channels = None
+        self.set_workspace_spine_preset("Modeling Standard")
+
+    def _build_spine_more_menu(self) -> None:
+        from qtpy import QtWidgets
+
+        menu = QtWidgets.QMenu(self.btn_spine_more)
+        style.apply_studio_style(menu)
+        for label, mkey in (
+            ("Dock Channel Box / Layers", "CHANNEL_BOX"),
+            ("Dock Modeling Toolkit", "MODELING_TOOLKIT"),
+            ("Dock Hypershade Material Browser", "HYPERSHADE"),
+            ("Dock Shape & Skin Editor", "SHAPE_EDITOR"),
+            ("Dock Maya .ma Reference Editor", "MAYA_INTERCHANGE"),
+            ("Dock Attribute Editor", "ATTRIBUTE_EDITOR"),
+            ("Dock Tool Settings", "TOOL_SETTINGS"),
+        ):
+            act = menu.addAction(label)
+            act.triggered.connect(lambda _=False, k=mkey: self._on_mode_tab_clicked(k))
+        menu.addSeparator()
+        for label, mkey in (
+            ("↗ Tear Off Hypershade Window", "HYPERSHADE"),
+            ("↗ Tear Off Shape & Skin Window", "SHAPE_EDITOR"),
+            ("↗ Tear Off .ma Reference Window", "MAYA_INTERCHANGE"),
+            ("↗ Tear Off Tool Settings Window", "TOOL_SETTINGS"),
+        ):
+            act = menu.addAction(label)
+            act.triggered.connect(lambda _=False, k=mkey: tear_off_panel(k))
+        self.btn_spine_more.setMenu(menu)
+
+    def _on_tear_off_clicked(self) -> None:
+        target = self._active_mode if self._active_mode != "CHANNEL_BOX" else "TOOL_SETTINGS"
+        tear_off_panel(target)
+
+    def _on_split_graph_clicked(self, checked: bool) -> None:
+        from . import desktop
+
+        if checked:
+            graph_type = "SHADER" if self._active_mode == "HYPERSHADE" else "GEOMETRY_NODES"
+            desktop.set_bottom_node_graph_split(enable=True, graph_type=graph_type)
+        else:
+            desktop.set_bottom_node_graph_split(enable=False)
+
+    def set_workspace_spine_preset(self, preset_name: str) -> None:
+        """Show only the relevant Core Maya Spine Tabs for `preset_name` so the right edge stays clean."""
+        self._active_workspace_preset = preset_name or "Modeling Standard"
+        allowed = set(WORKSPACE_SPINE_TABS.get(self._active_workspace_preset, WORKSPACE_SPINE_TABS["Modeling Standard"]))
+        allowed.add(self._active_mode)
+        for mkey, etab in self.edge_tabs.items():
+            etab.setVisible(mkey in allowed)
 
     def attach_channels_widget(self, channels_widget: Any) -> None:
         if channels_widget is None:
@@ -253,6 +491,8 @@ class _RightSidebarHostWidget:
 
     def set_active_page(self, mode: str) -> None:
         m = (mode or "CHANNEL_BOX").upper()
+        self._active_mode = m
+        self.lbl_panel_title.setText(PANEL_TITLES.get(m, m))
         self.btn_cb.setChecked(m == "CHANNEL_BOX")
         self.btn_mtk.setChecked(m == "MODELING_TOOLKIT")
         self.btn_hs.setChecked(m == "HYPERSHADE")
@@ -261,6 +501,8 @@ class _RightSidebarHostWidget:
         self.btn_ae.setChecked(m == "ATTRIBUTE_EDITOR")
         self.btn_ts.setChecked(m == "TOOL_SETTINGS")
 
+        # Ensure the active tab is visible on the vertical spine along with the workspace's core tabs
+        self.set_workspace_spine_preset(self._active_workspace_preset)
         for k, etab in self.edge_tabs.items():
             etab.setChecked(k == m)
             etab.update()
@@ -710,6 +952,7 @@ class RightAreaQtDock:
         tool_settings.teardown_tool_settings()
         interchange_panel.teardown_interchange_widgets()
         hypershade_panel.teardown_hypershade_widgets()
+        teardown_tear_off_windows()
         if self._host_container is not None:
             try:
                 self._host_container.root.hide()

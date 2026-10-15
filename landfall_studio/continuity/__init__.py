@@ -400,6 +400,70 @@ def toggle_viewport_20_feature(feature: str = "SSAO", enable: Optional[bool] = N
     return get_viewport_shading_state(ctx)
 
 
+def ensure_studio_light_rig(enable: Optional[bool] = None) -> Dict[str, Any]:
+    """Create or toggle a calibrated 3-point Maya/EEVEE Lookdev Light Rig (`grp_StudioLookdevRig`) and activate `All Lights [7]`."""
+    import bpy
+    from mathutils import Euler, Vector
+
+    rig_grp = bpy.data.objects.get("grp_StudioLookdevRig")
+    if enable is False and rig_grp is not None:
+        for child in list(rig_grp.children):
+            bpy.data.objects.remove(child, do_unlink=True)
+        bpy.data.objects.remove(rig_grp, do_unlink=True)
+        return {"ok": True, "enabled": False, "light_count": 0}
+
+    if rig_grp is None:
+        rig_grp = bpy.data.objects.new("grp_StudioLookdevRig", None)
+        bpy.context.collection.objects.link(rig_grp)
+        specs = (
+            ("studioKeyLight", (1.0, 0.96, 0.90), 260.0, 3.6, (3.2, -2.8, 3.8), (0.68, 0.12, 0.72)),
+            ("studioFillLight", (0.78, 0.86, 1.0), 95.0, 4.2, (-2.8, -2.4, 2.2), (0.85, -0.18, -0.65)),
+            ("studioRimTeal", (0.35, 0.78, 1.0), 180.0, 2.8, (-2.6, 2.8, 3.1), (-0.62, -0.22, -0.78)),
+        )
+        for lname, col, energy, sz, loc, rot in specs:
+            ldata = bpy.data.lights.new(f"{lname}Shape", type="AREA")
+            ldata.color = col
+            ldata.energy = energy
+            ldata.size = sz
+            lobj = bpy.data.objects.new(lname, ldata)
+            bpy.context.collection.objects.link(lobj)
+            lobj.parent = rig_grp
+            lobj.location = Vector(loc)
+            lobj.rotation_euler = Euler(rot, "XYZ")
+
+    set_maya_viewport_shading("7")
+    return {
+        "ok": True,
+        "enabled": True,
+        "rig_group": rig_grp.name,
+        "light_count": len(rig_grp.children),
+    }
+
+
+def voxel_remesh_active(voxel_size: float = 0.08) -> Dict[str, Any]:
+    """Run Blender's Voxel Remesh (`mesh.remesh_voxel_size` + `object.voxel_remesh`) on the active mesh."""
+    import bpy
+
+    act = getattr(getattr(bpy.context, "view_layer", None), "objects", None)
+    obj = act.active if act else None
+    if obj is None or getattr(obj, "type", "") != "MESH":
+        return {"ok": False, "error": "Active mesh object required for Voxel Remesh"}
+    me = obj.data
+    me.remesh_voxel_size = max(0.005, float(voxel_size))
+    try:
+        with bpy.context.temp_override(active_object=obj, object=obj):
+            bpy.ops.object.voxel_remesh()
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "object": obj.name,
+        "voxel_size": float(me.remesh_voxel_size),
+        "vertices": len(me.vertices),
+        "polygons": len(me.polygons),
+    }
+
+
 def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
     """Set the Maya Viewport 2.0 (EEVEE) shading mode (`4` Wireframe, `5` Smooth Shaded, `6` Textured EEVEE, `7` Use All Lights EEVEE) or toggle display flags."""
     global _active_maya_shading_mode
@@ -425,6 +489,9 @@ def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
 
     if norm in ("SSAO", "SHADOWS", "RAYTRACING"):
         return toggle_viewport_20_feature(norm, context=ctx)
+    if norm == "STUDIO_RIG":
+        ensure_studio_light_rig(enable=True)
+        return get_viewport_shading_state(ctx)
     if norm in ("RENDERER_EEVEE", "VIEWPORT_20"):
         return set_viewport_renderer("EEVEE", context=ctx)
     if norm == "RENDERER_CYCLES":
