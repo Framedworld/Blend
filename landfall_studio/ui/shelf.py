@@ -1,23 +1,23 @@
-"""Top-Docked Maya Status Line & Tabbed Icon Shelf (`landfall_studio.ui.shelf`).
+"""Top-Docked Maya Status Line & Tabbed Icon Shelf — Figma Make Spec (`landfall_studio.ui.shelf`).
 
 Provides:
 - `SHELF_TABS`: Canonical Maya shelf definitions (`Polygons`, `Modeling`, `Subdiv & Display`,
   `UV & Shading`, `Deform & Rigging`, `Pipeline`) with vector icon names, labels, single-click
   commands, and double-click / `□` option-box Tool Settings targets.
-- `MayaShelfWidget`: Two-row Modern Maya top bar:
-  - **Row 1 — Maya Status Line**: Menu Set selector (`Modeling [F2]`, `Rigging [F3]`, `Animation [F4]`,
-    `Rendering [F6]`), Selection Mode Masks (`Object F8`, `Vertex F9`, `Edge F10`, `Face F11`, `UV F12`),
-    Snap Magnets (`Grid X`, `Curve C`, `Point V`, `Pivot D`), History actions (`Center Pivot`,
-    `Delete History`, `Freeze`), and right-aligned Sidebar Workspace Toggles (`Outliner`, `Channel Box`,
-    `Tool Settings`, `Attribute Editor`).
-  - **Row 2 — Tabbed Icon Shelf**: Custom `_MayaShelfTileButton` tiles where single-click executes the
-    command and double-click (or clicking the top-right `□` badge) opens `Tool Settings`.
+- `MayaShelfWidget`: Two-row Modern Maya top bar matching the Figma Make prototype:
+  - **Row 1 — Maya Status Line (`34px`)**: Cyan Hexagonal Maya `M` mark, Menu Set selector (`Modeling [F2]`),
+    Quick `.ma` File/Interchange trio (`Open`, `Save`, `.ma`), joined `MASK` (`Obj | Vtx | Edg | Face | UV`)
+    pill bar, `SNAP` magnets (`Grid`, `Curve`, `Point`, `Pivot`), glowing emerald `● LIVE SURFACE` capsule,
+    `Symmetry OFF` pill, History actions, and right-aligned `Modeling Standard ▾` workspace selector.
+  - **Row 2 — Tabbed Icon Shelf (`66px`)**: Left-aligned with the DAG Outliner column (`42px` offset),
+    `2px` bottom Maya-teal (`#38A3D8`) active tab bar, `MAYA 2026.1` corner label, and `46x44px` top-beveled
+    `_MayaShelfTileButton` tiles with a `2px` top `#38A3D8` bar on active tools.
 - `TopShelfQtDock`: `WS_CHILD` dock manager embedding `MayaShelfWidget` at the top of the 3D Viewport.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from .. import commands as cmd_registry
 from . import channel_box_ext, icons, style, tool_settings
@@ -26,31 +26,34 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
     "Polygons": [
         {"id": "poly_cube", "label": "Cube", "icon": "poly_cube", "tool_ctx": "POLY_CUBE", "tip": "Create Polygon Cube (Double-click / □ for Option Box)"},
         {"id": "poly_sphere", "label": "Sphere", "icon": "poly_sphere", "tool_ctx": "POLY_SPHERE", "tip": "Create Polygon Sphere (Double-click / □ for Option Box)"},
-        {"id": "poly_cylinder", "label": "Cylinder", "icon": "poly_cylinder", "tool_ctx": "POLY_CYLINDER", "tip": "Create Polygon Cylinder (Double-click / □ for Option Box)"},
         {"id": "poly_plane", "label": "Plane", "icon": "poly_plane", "tool_ctx": "POLY_PLANE", "tip": "Create Polygon Plane (Double-click / □ for Option Box)"},
-        {"id": "extrude", "label": "Extrude", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Poly Extrude + In-Viewport Caddy (Double-click / □ for Option Box)"},
+        {"id": "poly_cylinder", "label": "Cylinder", "icon": "poly_cylinder", "tool_ctx": "POLY_CYLINDER", "tip": "Create Polygon Cylinder (Double-click / □ for Option Box)"},
         {"id": "bevel", "label": "Bevel", "icon": "bevel", "tool_ctx": "BEVEL", "tip": "Poly Bevel + In-Viewport Caddy (Double-click / □ for Option Box)"},
+        {"id": "extrude", "label": "Extrude", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Poly Extrude + In-Viewport Caddy (Double-click / □ for Option Box)"},
         {"id": "bridge", "label": "Bridge", "icon": "bridge", "tool_ctx": "BRIDGE", "tip": "Bridge Edge Loops + In-Viewport Caddy"},
         {"id": "connect", "label": "Connect", "icon": "connect", "tool_ctx": "CONNECT", "tip": "Connect Components + In-Viewport Caddy"},
+        {"id": "smooth_3", "label": "Smooth", "icon": "smooth_3", "tool_ctx": "SUBDIV", "tip": "Smooth Mesh Preview (3)"},
         {"id": "target_weld", "label": "Tgt Weld", "icon": "target_weld", "tool_ctx": "MERGE", "tip": "Maya Target Weld Tool (blendertk.TargetWeld)"},
-        {"id": "quad_draw", "label": "Quad Draw", "icon": "quad_draw", "tool_ctx": "SUBDIV", "tip": "Maya Quad Draw Retopology Tool"},
-        {"id": "make_live", "label": "Make Live", "icon": "make_live", "tool_ctx": "PIVOT", "tip": "Designate Selected Mesh as Scoped Live Surface"},
+        {"id": "quad_draw", "label": "Retopo", "icon": "quad_draw", "tool_ctx": "SUBDIV", "tip": "Maya Quad Draw Retopology Tool"},
+        {"id": "make_live", "label": "Live", "icon": "make_live", "tool_ctx": "PIVOT", "tip": "Designate Selected Mesh as Scoped Live Surface"},
         {"id": "center_pivot", "label": "Center Piv", "icon": "center_pivot", "tool_ctx": "PIVOT", "tip": "Modify > Center Pivot"},
         {"id": "non_def_history", "label": "Non-Def", "icon": "non_def_history", "tool_ctx": "HISTORY", "tip": "Edit > Delete by Type > Non-Deformer History"},
         {"id": "delete_history", "label": "Del Hist", "icon": "delete_history", "tool_ctx": "HISTORY", "tip": "Edit > Delete by Type > History (Alt+Shift+D)"},
         {"id": "freeze_transforms", "label": "Freeze", "icon": "freeze_transforms", "tool_ctx": "FREEZE", "tip": "Modify > Freeze Transformations"},
     ],
     "Modeling": [
-        {"id": "extrude", "label": "Extrude", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Poly Extrude + In-Viewport Caddy"},
+        {"id": "poly_cube", "label": "Cube", "icon": "poly_cube", "tool_ctx": "POLY_CUBE", "tip": "Create Polygon Cube"},
+        {"id": "poly_sphere", "label": "Sphere", "icon": "poly_sphere", "tool_ctx": "POLY_SPHERE", "tip": "Create Polygon Sphere"},
+        {"id": "poly_plane", "label": "Plane", "icon": "poly_plane", "tool_ctx": "POLY_PLANE", "tip": "Create Polygon Plane"},
+        {"id": "poly_cylinder", "label": "Cylinder", "icon": "poly_cylinder", "tool_ctx": "POLY_CYLINDER", "tip": "Create Polygon Cylinder"},
         {"id": "bevel", "label": "Bevel", "icon": "bevel", "tool_ctx": "BEVEL", "tip": "Poly Bevel + In-Viewport Caddy"},
+        {"id": "extrude", "label": "Extrude", "icon": "extrude", "tool_ctx": "EXTRUDE", "tip": "Poly Extrude + In-Viewport Caddy"},
         {"id": "bridge", "label": "Bridge", "icon": "bridge", "tool_ctx": "BRIDGE", "tip": "Bridge Edge Loops + In-Viewport Caddy"},
         {"id": "connect", "label": "Connect", "icon": "connect", "tool_ctx": "CONNECT", "tip": "Connect Components + In-Viewport Caddy"},
+        {"id": "smooth_3", "label": "Smooth", "icon": "smooth_3", "tool_ctx": "SUBDIV", "tip": "Smooth Mesh Preview (3)"},
         {"id": "target_weld", "label": "Tgt Weld", "icon": "target_weld", "tool_ctx": "MERGE", "tip": "Target Weld Vertices"},
         {"id": "quad_draw", "label": "Quad Draw", "icon": "quad_draw", "tool_ctx": "SUBDIV", "tip": "Quad Draw Retopology Tool"},
-        {"id": "make_live", "label": "Make Live", "icon": "make_live", "tool_ctx": "PIVOT", "tip": "Toggle Scoped Make Live Surface"},
-        {"id": "smooth_1", "label": "Cage (1)", "icon": "smooth_1", "tool_ctx": "SUBDIV", "tip": "Smooth Mesh Preview: Base Cage (1)"},
-        {"id": "smooth_2", "label": "Both (2)", "icon": "smooth_2", "tool_ctx": "SUBDIV", "tip": "Smooth Mesh Preview: Cage + Subdiv (2)"},
-        {"id": "smooth_3", "label": "Smooth (3)", "icon": "smooth_3", "tool_ctx": "SUBDIV", "tip": "Smooth Mesh Preview: Smooth (3)"},
+        {"id": "make_live", "label": "Live", "icon": "make_live", "tool_ctx": "PIVOT", "tip": "Toggle Scoped Make Live Surface"},
         {"id": "non_def_history", "label": "Non-Def", "icon": "non_def_history", "tool_ctx": "HISTORY", "tip": "Delete Non-Deformer History"},
         {"id": "scene_audit", "label": "Audit", "icon": "scene_audit", "tool_ctx": "PIPELINE", "tip": "Run Read-Only Scene Diagnostics"},
     ],
@@ -83,6 +86,10 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
         {"id": "freeze_transforms", "label": "Freeze", "icon": "freeze_transforms", "tool_ctx": "FREEZE", "tip": "Freeze Transformations"},
     ],
     "Pipeline": [
+        {"id": "maya_bridge_tab", "label": "Maya .ma", "icon": "reference_mgr", "tool_ctx": "PIPELINE", "tip": "Open Maya .ma/.mb Interchange & Reference Dock"},
+        {"id": "import_maya", "label": "Import .ma", "icon": "workspace_ed", "tool_ctx": "PIPELINE", "tip": "Import Maya Scene (.ma / .mb) via mayapy"},
+        {"id": "save_maya", "label": "Save .ma", "icon": "workspace_ed", "tool_ctx": "PIPELINE", "tip": "Save As Maya Scene (.ma / .mb) via mayapy"},
+        {"id": "send_maya", "label": "Send Maya", "icon": "reference_mgr", "tool_ctx": "PIPELINE", "tip": "Send Selection to Maya (blendertk.MayaBridge)"},
         {"id": "workspace_ed", "label": "Workspace", "icon": "workspace_ed", "tool_ctx": "PIPELINE", "tip": "Open Project Workspace Editor (workspace.mel)"},
         {"id": "reference_mgr", "label": "References", "icon": "reference_mgr", "tool_ctx": "PIPELINE", "tip": "Open Maya Reference Editor"},
         {"id": "scene_audit", "label": "Scene Audit", "icon": "scene_audit", "tool_ctx": "PIPELINE", "tip": "Run Read-Only Scene Diagnostics"},
@@ -91,14 +98,32 @@ SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
     ],
 }
 
+_active_shelf_tool_id: str = "bevel"
+
 
 def execute_shelf_item(item_id: str) -> Dict[str, Any]:
     """Execute a Maya Shelf button command by `item_id` and record in command feedback."""
+    global _active_shelf_tool_id
     import bpy
-    from .. import character, modeling
-    from . import desktop, modeling_toolkit, shape_editor
+    from .. import character, interchange, modeling
+    from . import desktop, interchange_panel, modeling_toolkit, shape_editor
 
     iid = (item_id or "").strip().lower()
+    _active_shelf_tool_id = iid
+    refresh_top_shelf_status()
+
+    if iid in ("maya_bridge_tab", "import_maya", "save_maya"):
+        res = desktop.cycle_right_dock("MAYA_INTERCHANGE")
+        interchange_panel.refresh_interchange_widgets()
+        desktop.set_command_feedback("MayaBridge", f"Interchange Dock ({iid})")
+        return {"ok": True, "item_id": iid, "result": res}
+
+    if iid == "send_maya":
+        res = interchange.send_to_maya(scope="SELECTED", dry_run=True)
+        interchange_panel.refresh_interchange_widgets()
+        desktop.set_command_feedback("SendToMaya", res.get("status", "OK"))
+        return {"ok": res.get("ok", False), "item_id": iid, "result": res}
+
     if iid == "shape_editor":
         res = desktop.cycle_right_dock("SHAPE_EDITOR")
         desktop.set_command_feedback("ShapeEditor", "Shape / Skin Dock Open")
@@ -341,8 +366,49 @@ def open_tool_settings_for_shelf_item(item_id: str, tool_ctx: Optional[str] = No
     return res
 
 
+def _create_maya_hex_logo_widget():
+    """Create the Figma Make `24x24px` cyan hexagonal Maya `M` badge."""
+    from qtpy import QtCore, QtGui, QtWidgets
+
+    class _MayaHexLogo(QtWidgets.QWidget):
+        def __init__(self):
+            super().__init__()
+            self.setFixedSize(24, 24)
+            self.setToolTip("Landfall Studio — Modern Maya Experience in Blender 5.2")
+
+        def paintEvent(self, _event):
+            p = QtGui.QPainter(self)
+            p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            poly = QtGui.QPolygonF(
+                [
+                    QtCore.QPointF(12.0, 1.0),
+                    QtCore.QPointF(22.0, 6.5),
+                    QtCore.QPointF(22.0, 17.5),
+                    QtCore.QPointF(12.0, 23.0),
+                    QtCore.QPointF(2.0, 17.5),
+                    QtCore.QPointF(2.0, 6.5),
+                ]
+            )
+            grad = QtGui.QLinearGradient(0, 0, 24, 24)
+            grad.setColorAt(0.0, QtGui.QColor("#33AFD2"))
+            grad.setColorAt(1.0, QtGui.QColor("#207DA4"))
+            p.setBrush(QtGui.QBrush(grad))
+            p.setPen(QtGui.QPen(QtGui.QColor("#69D2F0"), 1.0))
+            p.drawPolygon(poly)
+
+            f = p.font()
+            f.setPixelSize(11)
+            f.setBold(True)
+            p.setFont(f)
+            p.setPen(QtGui.QColor("#FFFFFF"))
+            p.drawText(self.rect(), QtCore.Qt.AlignCenter, "M")
+            p.end()
+
+    return _MayaHexLogo()
+
+
 def _create_shelf_tile_button(spec: Dict[str, str]):
-    """Create a Maya Shelf tile button with single-click execute, double-click Tool Settings, and a top-right `□` badge."""
+    """Create a Figma Make `46x44px` Maya Shelf tile button with top inner bevel, 2px top `#38A3D8` active bar, and `□` option-box badge."""
     from qtpy import QtCore, QtGui, QtWidgets
 
     class _MayaShelfTileButton(QtWidgets.QToolButton):
@@ -351,14 +417,14 @@ def _create_shelf_tile_button(spec: Dict[str, str]):
             self.spec = item_spec
             self.setObjectName("MayaShelfTile")
             self.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
-            self.setIcon(icons.get_icon(item_spec["icon"], 22))
-            self.setIconSize(QtCore.QSize(22, 22))
+            self.setIcon(icons.get_icon(item_spec["icon"], 20))
+            self.setIconSize(QtCore.QSize(20, 20))
             self.setText(item_spec["label"])
             self.setToolTip(item_spec.get("tip", item_spec["label"]))
-            self.setFixedSize(48, 42)
+            self.setFixedSize(46, 42)
+            self.setCheckable(True)
 
         def mousePressEvent(self, event):
-            # Clicking the top-right 12x12 '□' option-box corner opens Tool Settings directly
             if event.button() == QtCore.Qt.LeftButton and event.pos().x() >= self.width() - 13 and event.pos().y() <= 13:
                 open_tool_settings_for_shelf_item(
                     self.spec["id"], self.spec.get("tool_ctx")
@@ -381,11 +447,18 @@ def _create_shelf_tile_button(spec: Dict[str, str]):
 
         def paintEvent(self, event):
             super().paintEvent(event)
-            # Draw subtle Maya '□' option box glyph in top-right corner
             p = QtGui.QPainter(self)
             p.setRenderHint(QtGui.QPainter.Antialiasing, False)
-            p.setPen(QtGui.QPen(QtGui.QColor("#6E7B8B"), 1))
-            p.drawRect(self.width() - 10, 3, 6, 6)
+            is_act = self.isChecked() or (self.spec["id"] == _active_shelf_tool_id)
+            if is_act:
+                # Figma Make `.shelf-tile.active::after` 2px top Maya-teal bar
+                p.fillRect(0, 0, self.width(), 2, QtGui.QColor("#38A3D8"))
+            else:
+                # Top inner bevel highlight
+                p.fillRect(1, 1, self.width() - 2, 1, QtGui.QColor("#383D45"))
+            # Subtle Maya '□' option box glyph in top-right corner
+            p.setPen(QtGui.QPen(QtGui.QColor("#5C6672"), 1))
+            p.drawRect(self.width() - 9, 4, 5, 5)
             p.end()
 
     btn = _MayaShelfTileButton(spec)
@@ -394,7 +467,7 @@ def _create_shelf_tile_button(spec: Dict[str, str]):
 
 
 class MayaShelfWidget:
-    """Two-row Modern Maya Status Line + Tabbed Icon Shelf Qt widget."""
+    """Two-row Modern Maya Status Line + Tabbed Icon Shelf Qt widget (Figma Make Spec)."""
 
     def __init__(self, parent: Any = None):
         from qtpy import QtCore, QtWidgets
@@ -407,44 +480,83 @@ class MayaShelfWidget:
         vlay.setContentsMargins(0, 0, 0, 0)
         vlay.setSpacing(0)
 
-        # --- Row 1: Maya Status Line (26px) ---
+        # --- Row 1: Maya Status Line (32px, Figma Make `.status-line`) ---
         status_bar = QtWidgets.QFrame()
         status_bar.setObjectName("MayaStatusLine")
-        status_bar.setFixedHeight(26)
+        status_bar.setFixedHeight(32)
         slay = QtWidgets.QHBoxLayout(status_bar)
-        slay.setContentsMargins(6, 2, 6, 2)
-        slay.setSpacing(4)
+        slay.setContentsMargins(8, 2, 8, 2)
+        slay.setSpacing(5)
 
-        # Menu Set Selector
+        # 1. Cyan Hex Maya `M` Mark
+        slay.addWidget(_create_maya_hex_logo_widget())
+
+        # 2. Menu Set Selector Pill (`Modeling [F2]`)
         self.cmb_menu_set = QtWidgets.QComboBox()
         self.cmb_menu_set.addItems(
-            ["Modeling [F2]", "Rigging [F3]", "Animation [F4]", "FX [F5]", "Rendering [F6]"]
+            ["Modeling  [F2]", "Rigging  [F3]", "Animation  [F4]", "FX  [F5]", "Rendering  [F6]"]
         )
-        self.cmb_menu_set.setFixedWidth(115)
+        self.cmb_menu_set.setFixedWidth(112)
+        self.cmb_menu_set.setFixedHeight(23)
         self.cmb_menu_set.currentIndexChanged.connect(self._on_menu_set_changed)
         slay.addWidget(self.cmb_menu_set)
 
         slay.addWidget(self._make_vsep())
 
-        # Selection Mode Masks (F8 Object, F9 Vertex, F10 Edge, F11 Face, F12 UV)
-        for mask_icon, mode_id, tip in (
-            ("mask_obj", "OBJECT", "Object Mode (F8)"),
-            ("mask_vert", "VERT", "Vertex Component Mode (F9)"),
-            ("mask_edge", "EDGE", "Edge Component Mode (F10)"),
-            ("mask_face", "FACE", "Face Component Mode (F11)"),
-            ("mask_uv", "UV", "UV Component Mode (F12)"),
+        # 3. Quick Maya File / .ma Interchange Trio (`Open`, `Save`, `.ma`)
+        for btn_lbl, act_id, tip in (
+            ("Open", "import_maya", "Open / Import Maya Scene (.ma / .mb)"),
+            ("Save", "save_maya", "Save As Maya Scene (.ma / .mb)"),
+            (".ma", "maya_bridge_tab", "Open Maya .ma/.mb Interchange & Reference Editor"),
         ):
-            btn = QtWidgets.QToolButton()
-            btn.setIcon(icons.get_icon(mask_icon, 16))
-            btn.setIconSize(QtCore.QSize(16, 16))
-            btn.setFixedSize(22, 20)
-            btn.setToolTip(tip)
-            btn.clicked.connect(lambda _=False, m=mode_id: self._set_component_mode(m))
-            slay.addWidget(btn)
+            fb = QtWidgets.QPushButton(btn_lbl)
+            fb.setFixedHeight(21)
+            fb.setToolTip(tip)
+            if btn_lbl == ".ma":
+                fb.setStyleSheet(
+                    "background-color: #1E2C36; color: #7CC2E3; border: 1px solid #2B5B78; "
+                    "font-family: Consolas, monospace; font-weight: bold; font-size: 9px; padding: 1px 5px;"
+                )
+            fb.clicked.connect(lambda _=False, a=act_id: execute_shelf_item(a))
+            slay.addWidget(fb)
 
         slay.addWidget(self._make_vsep())
 
-        # Snap Magnets (X Grid, C Curve/Edge, V Point/Vertex, D Pivot)
+        # 4. Selection Mask Joined Pill Bar (`MASK` + `Obj | Vtx | Edg | Face | UV`)
+        lbl_mask = QtWidgets.QLabel("MASK")
+        lbl_mask.setObjectName("MayaFieldTag")
+        slay.addWidget(lbl_mask)
+
+        mask_group_frame = QtWidgets.QFrame()
+        mglay = QtWidgets.QHBoxLayout(mask_group_frame)
+        mglay.setContentsMargins(0, 0, 0, 0)
+        mglay.setSpacing(1)
+        self.mask_btns: Dict[str, Any] = {}
+        for pill_text, mode_id, tip in (
+            ("Obj", "OBJECT", "Object Mode (F8)"),
+            ("Vtx", "VERT", "Vertex Component Mode (F9)"),
+            ("Edg", "EDGE", "Edge Component Mode (F10)"),
+            ("Face", "FACE", "Face Component Mode (F11)"),
+            ("UV", "UV", "UV Component Mode (F12)"),
+        ):
+            btn = QtWidgets.QPushButton(pill_text)
+            btn.setObjectName("MayaMaskPill")
+            btn.setCheckable(True)
+            btn.setChecked(mode_id == "OBJECT")
+            btn.setFixedHeight(20)
+            btn.setToolTip(tip)
+            btn.clicked.connect(lambda _=False, m=mode_id: self._set_component_mode(m))
+            mglay.addWidget(btn)
+            self.mask_btns[mode_id] = btn
+        slay.addWidget(mask_group_frame)
+
+        slay.addWidget(self._make_vsep())
+
+        # 5. Snap Magnets (`SNAP` + Grid, Curve, Point, Pivot)
+        lbl_snap = QtWidgets.QLabel("SNAP")
+        lbl_snap.setObjectName("MayaFieldTag")
+        slay.addWidget(lbl_snap)
+
         for snap_icon, snap_elem, tip in (
             ("snap_grid", "INCREMENT", "Snap to Grid (Hold X)"),
             ("snap_curve", "EDGE", "Snap to Curve / Edge (Hold C)"),
@@ -452,24 +564,28 @@ class MayaShelfWidget:
             ("snap_pivot", "PIVOT", "Edit Pivot Mode (Hold D)"),
         ):
             btn = QtWidgets.QToolButton()
-            btn.setIcon(icons.get_icon(snap_icon, 16))
-            btn.setIconSize(QtCore.QSize(16, 16))
+            btn.setIcon(icons.get_icon(snap_icon, 15))
+            btn.setIconSize(QtCore.QSize(15, 15))
             btn.setFixedSize(22, 20)
             btn.setToolTip(tip)
             btn.clicked.connect(lambda _=False, s=snap_elem: self._trigger_snap_toggle(s))
             slay.addWidget(btn)
 
-        # Maya Make Live Magnet + Surface Name Pill
-        self.btn_live_surface = QtWidgets.QPushButton("Live: Off")
-        self.btn_live_surface.setIcon(icons.get_icon("make_live", 14))
-        self.btn_live_surface.setFixedHeight(20)
+        # 6. Glowing Emerald `● LIVE SURFACE` Capsule Pill (Figma Make `.live-pill.on`)
+        self.btn_live_surface = QtWidgets.QPushButton("● LIVE SURFACE")
+        self.btn_live_surface.setObjectName("MayaLiveCapsule")
+        self.btn_live_surface.setFixedHeight(22)
         self.btn_live_surface.setToolTip("Make Selected Mesh Live (Scoped Surface Projection)")
         self.btn_live_surface.clicked.connect(lambda: execute_shelf_item("make_live"))
         slay.addWidget(self.btn_live_surface)
 
         slay.addWidget(self._make_vsep())
 
-        # History / Transform quick actions
+        # 7. Symmetry Tag + History Quick Actions
+        lbl_sym = QtWidgets.QLabel("✳ Symmetry OFF")
+        lbl_sym.setStyleSheet("color: #747C87; font-size: 9px; font-weight: 600; padding: 0 3px;")
+        slay.addWidget(lbl_sym)
+
         for act_icon, act_id, tip in (
             ("center_pivot", "center_pivot", "Center Pivot"),
             ("non_def_history", "non_def_history", "Delete by Type > Non-Deformer History"),
@@ -477,8 +593,8 @@ class MayaShelfWidget:
             ("freeze_transforms", "freeze_transforms", "Freeze Transformations"),
         ):
             btn = QtWidgets.QToolButton()
-            btn.setIcon(icons.get_icon(act_icon, 16))
-            btn.setIconSize(QtCore.QSize(16, 16))
+            btn.setIcon(icons.get_icon(act_icon, 15))
+            btn.setIconSize(QtCore.QSize(15, 15))
             btn.setFixedSize(22, 20)
             btn.setToolTip(tip)
             btn.clicked.connect(lambda _=False, a=act_id: execute_shelf_item(a))
@@ -486,18 +602,23 @@ class MayaShelfWidget:
 
         slay.addStretch(1)
 
-        # Workspace Label Badge + Right Sidebar Quick Toggles
-        lbl_ws = QtWidgets.QLabel("Maya Classic")
-        lbl_ws.setObjectName("MayaBadgeTeal")
-        slay.addWidget(lbl_ws)
+        # 8. Workspace Selector (`Modeling Standard ▾`) + Sidebar Quick Switches
+        self.cmb_workspace = QtWidgets.QComboBox()
+        self.cmb_workspace.addItems(
+            ["Modeling Standard", "Maya Classic", "Rigging & Deform", "UV Editing", "Pipeline & .ma"]
+        )
+        self.cmb_workspace.setFixedWidth(124)
+        self.cmb_workspace.setFixedHeight(22)
+        self.cmb_workspace.currentIndexChanged.connect(self._on_workspace_preset_changed)
+        slay.addWidget(self.cmb_workspace)
 
         for lbl, mode_target, tip in (
             ("Outliner", "OUTLINER", "Toggle Left DAG Outliner"),
             ("Ch Box", "CHANNEL_BOX", "Show Channel Box / Layer Editor (Ctrl+A)"),
-            ("Mod Toolkit", "MODELING_TOOLKIT", "Show Maya Modeling Toolkit"),
-            ("Shape / Skin", "SHAPE_EDITOR", "Show Maya Shape Editor & Skin Weights"),
-            ("Tool Set", "TOOL_SETTINGS", "Show Tool Settings (□)"),
-            ("Attr Ed", "ATTRIBUTE_EDITOR", "Show Attribute Editor (Ctrl+A)"),
+            ("Mod", "MODELING_TOOLKIT", "Show Maya Modeling Toolkit"),
+            ("Shape", "SHAPE_EDITOR", "Show Maya Shape Editor & Skin Weights"),
+            (".ma Ref", "MAYA_INTERCHANGE", "Show Maya .ma/.mb Interchange & Reference Editor"),
+            ("Attr", "ATTRIBUTE_EDITOR", "Show Attribute Editor (Ctrl+A)"),
         ):
             b = QtWidgets.QPushButton(lbl)
             b.setFixedHeight(20)
@@ -507,16 +628,27 @@ class MayaShelfWidget:
 
         vlay.addWidget(status_bar)
 
-        # --- Row 2: Tabbed Icon Shelf (62px) ---
+        # --- Row 2: Tabbed Icon Shelf (72px, Figma Make `.shelf-zone`) ---
         self.tabs = QtWidgets.QTabWidget()
-        self.tabs.setFixedHeight(64)
+        self.tabs.setFixedHeight(72)
+        self.tabs.setStyleSheet(
+            "QTabWidget::tab-bar { left: 42px; } "
+            "QTabBar::tab { height: 20px; padding: 2px 12px; }"
+        )
+        corner_lbl = QtWidgets.QLabel("MAYA 2026.1  ")
+        corner_lbl.setStyleSheet(
+            "background: transparent; color: #545C66; font-size: 8px; font-weight: 700; letter-spacing: 1.0px; padding-right: 6px;"
+        )
+        self.tabs.setCornerWidget(corner_lbl, QtCore.Qt.TopRightCorner)
+
         self.tile_buttons: Dict[str, List[Any]] = {}
 
         for tab_name, items in SHELF_TABS.items():
             page = QtWidgets.QFrame()
             page.setObjectName("MayaShelfBar")
             play = QtWidgets.QHBoxLayout(page)
-            play.setContentsMargins(6, 2, 6, 2)
+            # 42px left margin aligns shelf tiles directly with the Outliner column past the 42px Tool Rail!
+            play.setContentsMargins(42, 2, 8, 2)
             play.setSpacing(4)
             self.tile_buttons[tab_name] = []
             for spec in items:
@@ -525,6 +657,10 @@ class MayaShelfWidget:
                 self.tile_buttons[tab_name].append(tile)
             play.addStretch(1)
             self.tabs.addTab(page, tab_name)
+
+        # Default to `Modeling` tab (index 1) matching Figma Make prototype
+        if self.tabs.count() > 1:
+            self.tabs.setCurrentIndex(1)
 
         vlay.addWidget(self.tabs)
         _shelf_instances.append(self)
@@ -535,18 +671,36 @@ class MayaShelfWidget:
         from qtpy import QtWidgets
 
         sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.VLine)
-        sep.setStyleSheet("color: #141619;")
+        sep.setFixedWidth(2)
+        sep.setFixedHeight(18)
+        sep.setStyleSheet("background-color: #101214; border-right: 1px solid #353A41;")
         return sep
 
     def _on_menu_set_changed(self, idx: int) -> None:
-        tab_map = {0: 0, 1: 4, 2: 4, 3: 2, 4: 3}
+        tab_map = {0: 1, 1: 4, 2: 4, 3: 2, 4: 3}
         if idx in tab_map and tab_map[idx] < self.tabs.count():
             self.tabs.setCurrentIndex(tab_map[idx])
+
+    def _on_workspace_preset_changed(self, idx: int) -> None:
+        from . import desktop
+
+        preset_map = {
+            0: "CHANNEL_BOX",
+            1: "CHANNEL_BOX",
+            2: "SHAPE_EDITOR",
+            3: "MODELING_TOOLKIT",
+            4: "MAYA_INTERCHANGE",
+        }
+        if idx in preset_map:
+            desktop.cycle_right_dock(preset_map[idx])
 
     def _set_component_mode(self, mode_id: str) -> None:
         import bpy
 
+        for mid, btn in self.mask_btns.items():
+            btn.blockSignals(True)
+            btn.setChecked(mid == mode_id)
+            btn.blockSignals(False)
         try:
             bpy.ops.landfall_studio.component_mode(mode=mode_id)
         except Exception:
@@ -577,20 +731,29 @@ class MayaShelfWidget:
 
         st = modeling.get_live_surface_state()
         if st.get("active") and st.get("object_name"):
-            self.btn_live_surface.setText(f"LIVE: {st['object_name']}")
+            self.btn_live_surface.setText(f"● LIVE: {st['object_name']}")
             self.btn_live_surface.setStyleSheet(
-                "background-color: #163628; color: #52E088; border: 1px solid #2EB868; font-weight: bold;"
+                "background-color: #1B3022; color: #B8EAC4; border: 1px solid #318B49; "
+                "border-radius: 10px; padding: 1px 9px; font-weight: 700; font-size: 9px;"
             )
         else:
-            self.btn_live_surface.setText("Live: Off")
-            self.btn_live_surface.setStyleSheet("")
+            self.btn_live_surface.setText("● LIVE SURFACE")
+            self.btn_live_surface.setStyleSheet(
+                "background-color: #1B3022; color: #B8EAC4; border: 1px solid #318B49; "
+                "border-radius: 10px; padding: 1px 9px; font-weight: 700; font-size: 9px;"
+            )
+
+        for tab_tiles in self.tile_buttons.values():
+            for tile in tab_tiles:
+                tile.setChecked(tile.spec["id"] == _active_shelf_tool_id)
+                tile.update()
 
 
 _shelf_instances: List[MayaShelfWidget] = []
 
 
 def refresh_top_shelf_status() -> None:
-    """Refresh the Top Status Line (`Live: <Surface>` pill) across all active shelf widgets."""
+    """Refresh the Top Status Line (`Live: <Surface>` pill and active shelf tile) across all active shelf widgets."""
     for inst in list(_shelf_instances):
         try:
             inst.refresh_status()
@@ -601,7 +764,7 @@ def refresh_top_shelf_status() -> None:
 class TopShelfQtDock:
     """Top `WS_CHILD` dock manager embedding `MayaShelfWidget` across the top of the 3D Viewport."""
 
-    DEFAULT_HEIGHT = 90
+    DEFAULT_HEIGHT = 104
 
     def __init__(self):
         from blendertk.ui_utils.qt_dock import QtDock
@@ -643,7 +806,6 @@ class TopShelfQtDock:
         if target.height <= height + 120:
             return None, False
 
-        # In Blender HORIZONTAL split, factor is the bottom fraction; 1 - factor is the top strip
         factor = max(0.25, min(0.92, 1.0 - (float(height) / float(target.height))))
         before = {a.as_pointer() for a in window.screen.areas}
         try:
@@ -662,7 +824,6 @@ class TopShelfQtDock:
         new_areas = [a for a in window.screen.areas if a.as_pointer() not in before]
         if not new_areas:
             return None, False
-        # Pick the shorter 90px strip at the top (whereas max(key=a.y) picked the 880px viewport)
         top_area = min([new_areas[0], target], key=lambda a: (a.height, a.y))
         try:
             top_area.ui_type = "INFO"
@@ -713,7 +874,7 @@ class TopShelfQtDock:
         dock._release_widget()
 
         dock._window, dock._area, dock._hwnd = window, area, hwnd
-        dock._edge_pad = dock._native_edge_pad()
+        dock._edge_pad = 0
         dock._area_header = False
         dock._apply_area_header(window, area)
 

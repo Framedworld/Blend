@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional
 from . import (
     attribute_editor,
     channel_box_ext,
+    interchange_panel,
     modeling_toolkit,
     shape_editor,
     style,
@@ -23,8 +24,81 @@ from . import (
 )
 
 
+def _create_rotated_edge_tab(
+    text: str,
+    mode_key: str,
+    on_click: Callable[[str], None],
+    height: int = 114,
+):
+    """Create a Figma Make 26px-wide vertical rotated (-90 deg) edge tab button with a right-edge active bar."""
+    from qtpy import QtCore, QtGui, QtWidgets
+
+    class _MayaRotatedEdgeTab(QtWidgets.QPushButton):
+        def __init__(self) -> None:
+            super().__init__(text)
+            self.mode_key = mode_key
+            self._hovered = False
+            self.setCheckable(True)
+            self.setFixedSize(26, height)
+            self.setCursor(QtCore.Qt.PointingHandCursor)
+            self.setToolTip(f"{text} ({mode_key})")
+            self.clicked.connect(lambda: on_click(mode_key))
+
+        def enterEvent(self, event) -> None:
+            self._hovered = True
+            self.update()
+            super().enterEvent(event)
+
+        def leaveEvent(self, event) -> None:
+            self._hovered = False
+            self.update()
+            super().leaveEvent(event)
+
+        def paintEvent(self, _event) -> None:
+            p = QtGui.QPainter(self)
+            p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            w, h = self.width(), self.height()
+            active = self.isChecked()
+
+            bg = (
+                QtGui.QColor("#22252A")
+                if active
+                else (QtGui.QColor("#22262C") if self._hovered else QtGui.QColor("#1B1E22"))
+            )
+            p.fillRect(0, 0, w, h, bg)
+
+            # Bottom separator line
+            p.setPen(QtGui.QColor("#2A2E35"))
+            p.drawLine(0, h - 1, w, h - 1)
+            # Right border line
+            p.drawLine(w - 1, 0, w - 1, h)
+
+            if active:
+                p.fillRect(w - 2, 0, 2, h, QtGui.QColor("#38A3D8"))
+
+            p.save()
+            p.translate(w / 2.0, h / 2.0)
+            p.rotate(-90.0)
+            f = p.font()
+            f.setPixelSize(9)
+            f.setBold(True)
+            f.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 0.8)
+            p.setFont(f)
+            p.setPen(
+                QtGui.QColor("#E6EDF3")
+                if active
+                else (QtGui.QColor("#C8D1DC") if self._hovered else QtGui.QColor("#7D8590"))
+            )
+            text_rect = QtCore.QRectF(-h / 2.0 + 4.0, -w / 2.0, h - 8.0, w)
+            p.drawText(text_rect, QtCore.Qt.AlignCenter, text)
+            p.restore()
+            p.end()
+
+    return _MayaRotatedEdgeTab()
+
+
 class _RightSidebarHostWidget:
-    """Frameless Qt container holding the Maya right-sidebar tab strip + `QStackedWidget` (`Channel Box`, `Modeling Toolkit`, `Shape / Skin`, `Attribute Editor`, `Tool Settings`)."""
+    """Frameless Qt container holding the Figma Make vertical rotated edge tab strip + top tab bar + `QStackedWidget`."""
 
     def __init__(self, on_mode_tab_clicked: Callable[[str], None]):
         from qtpy import QtCore, QtWidgets
@@ -34,45 +108,82 @@ class _RightSidebarHostWidget:
         self.root.setObjectName("MayaPanelRoot")
         style.apply_studio_style(self.root)
 
-        vlay = QtWidgets.QVBoxLayout(self.root)
+        outer_hlay = QtWidgets.QHBoxLayout(self.root)
+        outer_hlay.setContentsMargins(0, 0, 0, 0)
+        outer_hlay.setSpacing(0)
+
+        # 1. Figma Make Left-Edge 26px Vertical Rotated Edge Tab Strip
+        self.edge_strip = QtWidgets.QFrame()
+        self.edge_strip.setObjectName("MayaEdgeTabStrip")
+        self.edge_strip.setFixedWidth(26)
+        elay = QtWidgets.QVBoxLayout(self.edge_strip)
+        elay.setContentsMargins(0, 0, 0, 0)
+        elay.setSpacing(0)
+
+        self.edge_tabs = {}
+        for label, mkey, h_px in (
+            ("CHANNEL BOX", "CHANNEL_BOX", 108),
+            ("MODELING TOOLKIT", "MODELING_TOOLKIT", 122),
+            ("SHAPE EDITOR", "SHAPE_EDITOR", 104),
+            ("MAYA BRIDGE", "MAYA_INTERCHANGE", 100),
+            ("ATTRIBUTE EDITOR", "ATTRIBUTE_EDITOR", 118),
+            ("TOOL SETTINGS", "TOOL_SETTINGS", 104),
+        ):
+            etab = _create_rotated_edge_tab(label, mkey, self._on_mode_tab_clicked, height=h_px)
+            self.edge_tabs[mkey] = etab
+            elay.addWidget(etab)
+        elay.addStretch(1)
+        outer_hlay.addWidget(self.edge_strip)
+
+        # 2. Right Inspector Column (Header Bar + Compact Tab Strip + QStackedWidget)
+        right_col = QtWidgets.QFrame()
+        vlay = QtWidgets.QVBoxLayout(right_col)
         vlay.setContentsMargins(0, 0, 0, 0)
         vlay.setSpacing(0)
+        outer_hlay.addWidget(right_col, 1)
 
-        # Top Maya Sidebar Tab Bar (Ch Box | Mod Toolkit | Shape / Skin | Attr Editor | Tool Settings)
+        # Top Maya Sidebar Tab Bar (Ch Box | Mod Toolkit | Shape / Skin | .ma Bridge | Attr Ed | Tool Set)
         tab_strip = QtWidgets.QFrame()
         tab_strip.setObjectName("MayaStatusLine")
         tlay = QtWidgets.QHBoxLayout(tab_strip)
-        tlay.setContentsMargins(2, 3, 2, 2)
+        tlay.setContentsMargins(2, 2, 2, 2)
         tlay.setSpacing(2)
 
         self.btn_cb = QtWidgets.QPushButton("Ch Box")
         self.btn_cb.setCheckable(True)
-        self.btn_cb.setFixedHeight(22)
+        self.btn_cb.setFixedHeight(21)
         self.btn_cb.clicked.connect(lambda: self._on_mode_tab_clicked("CHANNEL_BOX"))
 
-        self.btn_mtk = QtWidgets.QPushButton("Mod Toolkit")
+        self.btn_mtk = QtWidgets.QPushButton("Mod TK")
         self.btn_mtk.setCheckable(True)
-        self.btn_mtk.setFixedHeight(22)
+        self.btn_mtk.setFixedHeight(21)
         self.btn_mtk.clicked.connect(lambda: self._on_mode_tab_clicked("MODELING_TOOLKIT"))
 
-        self.btn_se = QtWidgets.QPushButton("Shape / Skin")
+        self.btn_se = QtWidgets.QPushButton("Shape/Skin")
         self.btn_se.setCheckable(True)
-        self.btn_se.setFixedHeight(22)
+        self.btn_se.setFixedHeight(21)
         self.btn_se.clicked.connect(lambda: self._on_mode_tab_clicked("SHAPE_EDITOR"))
+
+        self.btn_mi = QtWidgets.QPushButton(".ma Bridge")
+        self.btn_mi.setCheckable(True)
+        self.btn_mi.setFixedHeight(21)
+        self.btn_mi.setToolTip("Maya .ma/.mb Interchange & Reference Manager")
+        self.btn_mi.clicked.connect(lambda: self._on_mode_tab_clicked("MAYA_INTERCHANGE"))
 
         self.btn_ae = QtWidgets.QPushButton("Attr Ed")
         self.btn_ae.setCheckable(True)
-        self.btn_ae.setFixedHeight(22)
+        self.btn_ae.setFixedHeight(21)
         self.btn_ae.clicked.connect(lambda: self._on_mode_tab_clicked("ATTRIBUTE_EDITOR"))
 
         self.btn_ts = QtWidgets.QPushButton("Tool Set")
         self.btn_ts.setCheckable(True)
-        self.btn_ts.setFixedHeight(22)
+        self.btn_ts.setFixedHeight(21)
         self.btn_ts.clicked.connect(lambda: self._on_mode_tab_clicked("TOOL_SETTINGS"))
 
         tlay.addWidget(self.btn_cb, 1)
         tlay.addWidget(self.btn_mtk, 1)
         tlay.addWidget(self.btn_se, 1)
+        tlay.addWidget(self.btn_mi, 1)
         tlay.addWidget(self.btn_ae, 1)
         tlay.addWidget(self.btn_ts, 1)
         vlay.addWidget(tab_strip)
@@ -98,6 +209,9 @@ class _RightSidebarHostWidget:
         self.se_widget = shape_editor.create_shape_editor_widget()
         self.stack.addWidget(self.se_widget)
 
+        self.mi_widget = interchange_panel.create_interchange_widget()
+        self.stack.addWidget(self.mi_widget)
+
         self._attached_channels = None
 
     def attach_channels_widget(self, channels_widget: Any) -> None:
@@ -106,6 +220,8 @@ class _RightSidebarHostWidget:
         ext = channel_box_ext.ensure_channel_box_extensions(channels_widget)
         if self._attached_channels is not channels_widget:
             self._attached_channels = channels_widget
+            if ext is not None and getattr(ext, "obj_header_bar", None) is not None:
+                self.page_cb_lay.addWidget(ext.obj_header_bar, 0)
             self.page_cb_lay.addWidget(channels_widget, 5)
             if ext is not None and ext.root is not None:
                 self.page_cb_lay.addWidget(ext.root, 6)
@@ -128,8 +244,13 @@ class _RightSidebarHostWidget:
         self.btn_cb.setChecked(m == "CHANNEL_BOX")
         self.btn_mtk.setChecked(m == "MODELING_TOOLKIT")
         self.btn_se.setChecked(m == "SHAPE_EDITOR")
+        self.btn_mi.setChecked(m == "MAYA_INTERCHANGE")
         self.btn_ae.setChecked(m == "ATTRIBUTE_EDITOR")
         self.btn_ts.setChecked(m == "TOOL_SETTINGS")
+
+        for k, etab in self.edge_tabs.items():
+            etab.setChecked(k == m)
+            etab.update()
 
         if m == "ATTRIBUTE_EDITOR":
             if self.ae_ctrl is not None:
@@ -147,6 +268,10 @@ class _RightSidebarHostWidget:
             if self.se_widget is not None:
                 self.se_widget.refresh_from_scene()
             self.stack.setCurrentIndex(4)
+        elif m == "MAYA_INTERCHANGE":
+            if self.mi_widget is not None:
+                self.mi_widget.refresh_from_scene()
+            self.stack.setCurrentIndex(5)
         else:
             if self._attached_channels is not None:
                 self._attached_channels.show()
@@ -155,7 +280,7 @@ class _RightSidebarHostWidget:
 
 
 class RightAreaQtDock:
-    """Right-column `WS_CHILD` dock manager supporting `Channel Box`, `Modeling Toolkit`, `Shape / Skin`, `Attribute Editor`, `Tool Settings`, and `Native Properties`."""
+    """Right-column `WS_CHILD` dock manager supporting `Channel Box`, `Modeling Toolkit`, `Shape / Skin`, `Maya Interchange`, `Attribute Editor`, `Tool Settings`, and `Native Properties`."""
 
     DEFAULT_WIDTH = 340
 
@@ -193,7 +318,15 @@ class RightAreaQtDock:
     def is_qt_embedded(self) -> bool:
         return bool(
             self._inner_dock.docked
-            and self._mode in ("CHANNEL_BOX", "MODELING_TOOLKIT", "SHAPE_EDITOR", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS")
+            and self._mode
+            in (
+                "CHANNEL_BOX",
+                "MODELING_TOOLKIT",
+                "SHAPE_EDITOR",
+                "MAYA_INTERCHANGE",
+                "ATTRIBUTE_EDITOR",
+                "TOOL_SETTINGS",
+            )
         )
 
     @property
@@ -228,7 +361,14 @@ class RightAreaQtDock:
 
     def _handle_inner_detach(self) -> None:
         self._created_split_area = False
-        if self._mode in ("CHANNEL_BOX", "MODELING_TOOLKIT", "SHAPE_EDITOR", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS"):
+        if self._mode in (
+            "CHANNEL_BOX",
+            "MODELING_TOOLKIT",
+            "SHAPE_EDITOR",
+            "MAYA_INTERCHANGE",
+            "ATTRIBUTE_EDITOR",
+            "TOOL_SETTINGS",
+        ):
             self._mode = "HIDDEN"
         if self._user_on_detach is not None:
             try:
@@ -405,6 +545,13 @@ class RightAreaQtDock:
             self._channels_widget, target_mode="SHAPE_EDITOR"
         )
 
+    def show_maya_interchange(self) -> bool:
+        """Show the Maya Qt `Maya .ma/.mb Interchange & Reference Manager` tab in the right dock."""
+        interchange_panel.refresh_interchange_widgets()
+        return self._dock_host_in_right_area(
+            self._channels_widget, target_mode="MAYA_INTERCHANGE"
+        )
+
     def show_native_properties(self, properties_context: str = "OBJECT") -> bool:
         """Suspend the `WS_CHILD` overlay to expose Blender's native `PROPERTIES` area."""
         import bpy
@@ -535,6 +682,7 @@ class RightAreaQtDock:
         channel_box_ext.teardown_channel_box_extensions()
         attribute_editor.teardown_attribute_editor()
         tool_settings.teardown_tool_settings()
+        interchange_panel.teardown_interchange_widgets()
         if self._host_container is not None:
             try:
                 self._host_container.root.hide()

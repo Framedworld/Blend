@@ -1,4 +1,4 @@
-"""Left-Docked Maya Tool Box & DAG Outliner (`landfall_studio.ui.outliner`).
+"""Left-Docked Maya Tool Box Rail (`42px`) & DAG Outliner (`205px`) — Figma Make Spec (`landfall_studio.ui.outliner`).
 
 Provides:
 - `reparent_preserve_world(child_name, parent_name)`: Reparents `child` under `parent` (or unparents
@@ -6,10 +6,19 @@ Provides:
 - `get_dag_outliner_snapshot(filter_text="", show_shapes=True)`: Returns the hierarchical Maya DAG tree
   where each `Transform` (`Object`) expands `[+]` to show its child `Shape` (`Object.data`), active
   `Modifiers`, and child `Transform` nodes.
-- `MayaLeftSidebarWidget`: Combines the vertical **Maya Tool Box** (`Select Q`, `Lasso`, `Move W`,
-  `Rotate E`, `Scale R`, `Last Tool Y`, double-click opens `Tool Settings`) on the far left with the
-  **Maya DAG Outliner** (`QTreeWidget` supporting search filtering, `[Shapes]` expansion, two-way
-  selection sync, and `MMB` drag-and-drop world-preserving reparenting).
+- `MayaLeftSidebarWidget`: Matches the Figma Make Left Dock:
+  - **Left Strip (`42px` Tool Box Rail, `#1C1F23`)**: `32x32px` `.rail-tool` tiles (`Select Q`, `Lasso`,
+    `Paint`, `Move W`, `Rotate E`, `Scale R`, `Pivot D`) with corner hotkey badges (`Q`, `W`, `E`, `R`, `D`),
+    a `2px` left-edge glowing Maya-teal bar (`#38A3D8`) on the active tool, and bottom layout preset icons.
+  - **Right Pane (`DAG Outliner` + `DISPLAY LAYERS`)**:
+    - `28px` `OUTLINER` header (`#2A2E35`) + `+` / `Shapes` toggle
+    - Recessed search filter with `⌘F` keycap badge
+    - `20px` `SCENE HIERARCHY | TYPE` column subheader (`#1A1D20`)
+    - Custom `_MayaOutlinerItemDelegate` rendering `#225976 -> #254759` selected row gradient + `2px` left
+      `#38A3D8` bar, hierarchy guide lines, and right-aligned pill **Type Badges** (`GRP`, `MSH`, `RIG`,
+      `LGT`, `CAM`, `SHP`, `MOD`, `REF`)
+    - Bottom **`DISPLAY LAYERS`** subpanel with eye toggle, `4x14px` color bar (`#62B1DF`, `#D779A8`,
+      `#CBAC5F`), layer name, and `V`/`T`/`R` mode button.
 - `LeftOutlinerQtDock`: `WS_CHILD` dock manager embedding `MayaLeftSidebarWidget` on the left side of
   the 3D Viewport.
 """
@@ -20,6 +29,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .. import commands as cmd_registry
 from . import channel_box_ext, icons, style, tool_settings
+
+_ROLE_NODE_BADGE = 257
+_ROLE_NODE_LINKED = 258
 
 
 def _is_descendant_of(candidate_parent: Any, child_obj: Any) -> bool:
@@ -61,7 +73,6 @@ def reparent_preserve_world(
         if _is_descendant_of(parent_obj, child):
             return {"ok": False, "error": "Cannot parent an object to its own descendant (cycle)"}
 
-    # Ensure view layer matrices are current before capturing world matrix
     try:
         bpy.context.view_layer.update()
     except Exception:
@@ -95,6 +106,25 @@ def reparent_preserve_world(
     }
 
 
+def _classify_type_badge(obj_type: str, is_linked: bool, has_children: bool) -> str:
+    if is_linked:
+        return "REF"
+    t = (obj_type or "").upper()
+    if t == "EMPTY":
+        return "GRP" if has_children else "LOC"
+    if t == "MESH":
+        return "MSH"
+    if t == "ARMATURE":
+        return "RIG"
+    if t == "LIGHT":
+        return "LGT"
+    if t == "CAMERA":
+        return "CAM"
+    if t == "CURVE":
+        return "CTL"
+    return "DAG"
+
+
 def _build_dag_node(obj: Any, children_map: Dict[str, List[Any]], show_shapes: bool) -> Dict[str, Any]:
     sinfo = channel_box_ext.get_object_shape_info(obj)
     sub_nodes: List[Dict[str, Any]] = []
@@ -107,6 +137,7 @@ def _build_dag_node(obj: Any, children_map: Dict[str, List[Any]], show_shapes: b
                 "owner_object": obj.name,
                 "shape_type": sinfo["shape_type"],
                 "linked": sinfo["linked"],
+                "badge": "SHP",
                 "children": [],
             }
         )
@@ -119,11 +150,13 @@ def _build_dag_node(obj: Any, children_map: Dict[str, List[Any]], show_shapes: b
                     "kind": "MODIFIER",
                     "owner_object": obj.name,
                     "modifier_type": mod.type,
+                    "badge": "MOD",
                     "children": [],
                 }
             )
 
-    for ch_obj in children_map.get(obj.name, ()):
+    ch_objs = children_map.get(obj.name, ())
+    for ch_obj in ch_objs:
         sub_nodes.append(_build_dag_node(ch_obj, children_map, show_shapes))
 
     is_sel = False
@@ -132,6 +165,7 @@ def _build_dag_node(obj: Any, children_map: Dict[str, List[Any]], show_shapes: b
     except Exception:
         pass
 
+    linked = channel_box_ext.is_datablock_linked(obj)
     return {
         "name": obj.name,
         "kind": "TRANSFORM",
@@ -139,7 +173,8 @@ def _build_dag_node(obj: Any, children_map: Dict[str, List[Any]], show_shapes: b
         "shape_name": sinfo["shape_name"],
         "parent": obj.parent.name if obj.parent is not None else None,
         "selected": is_sel,
-        "linked": channel_box_ext.is_datablock_linked(obj),
+        "linked": linked,
+        "badge": _classify_type_badge(obj.type, linked, bool(ch_objs)),
         "children": sub_nodes,
     }
 
@@ -214,7 +249,73 @@ def select_in_outliner(object_names: List[str]) -> Dict[str, Any]:
 
 
 def _create_dag_tree_widget(on_reparent_drop, on_selection_changed):
-    from qtpy import QtCore, QtWidgets
+    from qtpy import QtCore, QtGui, QtWidgets
+
+    BADGE_COLORS = {
+        "GRP": "#7E8791",
+        "LOC": "#8A94A0",
+        "MSH": "#58B1DB",
+        "RIG": "#B98EDB",
+        "CTL": "#5AC8DB",
+        "LGT": "#D7B957",
+        "CAM": "#8AB4F8",
+        "SHP": "#62B1DF",
+        "MOD": "#4AB866",
+        "REF": "#3FB950",
+    }
+
+    class _MayaOutlinerItemDelegate(QtWidgets.QStyledItemDelegate):
+        """Custom delegate painting the Figma Make selected row gradient, 2px left `#38A3D8` bar, and right-aligned Type Badges."""
+
+        def sizeHint(self, option, index):
+            sz = super().sizeHint(option, index)
+            return QtCore.QSize(sz.width(), 22)
+
+        def paint(self, painter, option, index):
+            painter.save()
+            rect = option.rect
+            is_sel = bool(option.state & QtWidgets.QStyle.State_Selected)
+            is_hover = bool(option.state & QtWidgets.QStyle.State_MouseOver)
+
+            if is_sel:
+                grad = QtGui.QLinearGradient(rect.left(), rect.top(), rect.right(), rect.top())
+                grad.setColorAt(0.0, QtGui.QColor("#225976"))
+                grad.setColorAt(1.0, QtGui.QColor("#254759"))
+                painter.fillRect(rect, grad)
+                painter.fillRect(rect.left(), rect.top(), 2, rect.height(), QtGui.QColor("#38A3D8"))
+            elif is_hover:
+                painter.fillRect(rect, QtGui.QColor("#282D34"))
+
+            # Draw icon + text via base delegate without default selection box
+            opt = QtWidgets.QStyleOptionViewItem(option)
+            opt.state &= ~QtWidgets.QStyle.State_Selected
+            opt.state &= ~QtWidgets.QStyle.State_HasFocus
+            super().paint(painter, opt, index)
+
+            # Draw right-aligned Type Badge pill (`GRP`, `MSH`, `RIG`, `LGT`, `CAM`, `REF`)
+            badge = index.data(_ROLE_NODE_BADGE)
+            if badge:
+                badge_str = str(badge)
+                bw = 26
+                bh = 14
+                bx = rect.right() - bw - 6
+                by = rect.top() + (rect.height() - bh) // 2
+                b_rect = QtCore.QRectF(bx, by, bw, bh)
+
+                painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+                painter.setBrush(QtGui.QColor("#191B1F"))
+                painter.setPen(QtGui.QPen(QtGui.QColor("#33383F"), 1.0))
+                painter.drawRoundedRect(b_rect, 2.0, 2.0)
+
+                f = painter.font()
+                f.setFamily("Consolas")
+                f.setPixelSize(8)
+                f.setBold(True)
+                painter.setFont(f)
+                painter.setPen(QtGui.QColor(BADGE_COLORS.get(badge_str, "#7E8791")))
+                painter.drawText(b_rect, QtCore.Qt.AlignCenter, badge_str)
+
+            painter.restore()
 
     class _MayaDagTreeWidget(QtWidgets.QTreeWidget):
         """QTreeWidget supporting Maya MMB (or LMB) drag-and-drop world-preserving reparenting."""
@@ -222,12 +323,13 @@ def _create_dag_tree_widget(on_reparent_drop, on_selection_changed):
         def __init__(self):
             super().__init__()
             self.setHeaderHidden(True)
-            self.setAlternatingRowColors(True)
+            self.setAlternatingRowColors(False)
             self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
             self.setDragEnabled(True)
             self.setAcceptDrops(True)
             self.setDropIndicatorShown(True)
             self.setIndentation(14)
+            self.setItemDelegate(_MayaOutlinerItemDelegate(self))
             self._drag_source_obj: Optional[str] = None
             self.itemSelectionChanged.connect(on_selection_changed)
 
@@ -237,7 +339,6 @@ def _create_dag_tree_widget(on_reparent_drop, on_selection_changed):
                 obj_name = item.data(0, QtCore.Qt.UserRole)
                 self._drag_source_obj = str(obj_name) if obj_name else None
             if event.button() == QtCore.Qt.MiddleButton and item is not None:
-                # Allow MMB drag initiation just like Maya Outliner
                 self.setCurrentItem(item)
                 fake_ev = type(event)(
                     QtCore.QEvent.MouseButtonPress,
@@ -272,10 +373,10 @@ def _create_dag_tree_widget(on_reparent_drop, on_selection_changed):
 
 
 class MayaLeftSidebarWidget:
-    """Combined Left Maya Tool Box (`Q/W/E/R/Y`) + Expandable DAG Outliner."""
+    """Combined Left `42px` Maya Tool Box Rail (`Q/W/E/R`) + DAG Outliner + `DISPLAY LAYERS` (Figma Make Spec)."""
 
     def __init__(self, parent: Any = None):
-        from qtpy import QtCore, QtWidgets
+        from qtpy import QtCore, QtGui, QtWidgets
 
         self._updating = False
         self.root = QtWidgets.QFrame(parent)
@@ -286,91 +387,156 @@ class MayaLeftSidebarWidget:
         hlay.setContentsMargins(0, 0, 0, 0)
         hlay.setSpacing(0)
 
-        # --- Left Strip: Classic Maya Vertical Tool Box (36px wide) ---
+        # --- Left Strip: Figma Make `42px` Vertical Tool Box Rail (`#1C1F23`) ---
         toolbox = QtWidgets.QFrame()
-        toolbox.setObjectName("MayaStatusLine")
-        toolbox.setFixedWidth(36)
+        toolbox.setObjectName("MayaToolRail")
+        toolbox.setFixedWidth(42)
         tblay = QtWidgets.QVBoxLayout(toolbox)
-        tblay.setContentsMargins(3, 4, 3, 4)
-        tblay.setSpacing(4)
+        tblay.setContentsMargins(5, 6, 5, 6)
+        tblay.setSpacing(5)
 
         self.tool_btns: Dict[str, Any] = {}
-        for tool_id, icon_name, tip in (
-            ("SELECT", "tool_select", "Select Tool (Q) — Double-click for Tool Settings"),
-            ("LASSO", "tool_lasso", "Lasso Select Tool"),
-            ("TRANSLATE", "tool_move", "Move Tool (W) — Double-click for Tool Settings"),
-            ("ROTATE", "tool_rotate", "Rotate Tool (E) — Double-click for Tool Settings"),
-            ("RESIZE", "tool_scale", "Scale Tool (R) — Double-click for Tool Settings"),
+        for tool_id, icon_name, key_hint, tip in (
+            ("SELECT", "tool_select", "Q", "Select Tool (Q) — Double-click for Tool Settings"),
+            ("LASSO", "tool_lasso", "", "Lasso Select Tool"),
+            ("TRANSLATE", "tool_move", "W", "Move Tool (W) — Double-click for Tool Settings"),
+            ("ROTATE", "tool_rotate", "E", "Rotate Tool (E) — Double-click for Tool Settings"),
+            ("RESIZE", "tool_scale", "R", "Scale Tool (R) — Double-click for Tool Settings"),
         ):
-            btn = self._make_toolbox_button(tool_id, icon_name, tip)
+            btn = self._make_toolbox_button(tool_id, icon_name, key_hint, tip)
             tblay.addWidget(btn)
             self.tool_btns[tool_id] = btn
 
+        # Extra Pivot / Soft Select rail buttons matching Figma Make `.tool-rail`
+        for extra_icon, extra_key, extra_tip, extra_cb in (
+            ("snap_pivot", "D", "Edit Pivot Mode (Hold D)", lambda: self._on_quick_layout("CENTER_PIVOT")),
+            ("smooth_3", "B", "Soft Selection / Smooth Preview", lambda: self._on_quick_layout("SOFT_SELECT")),
+        ):
+            ebtn = self._make_rail_action_button(extra_icon, extra_key, extra_tip, extra_cb)
+            tblay.addWidget(ebtn)
+
         tblay.addStretch(1)
 
-        # Quick Layout Preset buttons at bottom of Maya Tool Box
+        # Bottom Miniature Layout Preset Icons (`32x24px`)
         for lay_icon, lay_tip, lay_cb in (
             ("mask_obj", "Single Perspective View", lambda: self._on_quick_layout("PERSP")),
-            ("quad_view", "Frame All (A)", lambda: self._on_quick_layout("FRAME_ALL")),
-            ("snap_pivot", "Center Pivot", lambda: self._on_quick_layout("CENTER_PIVOT")),
+            ("quad_view", "Four-View / Frame All (A)", lambda: self._on_quick_layout("FRAME_ALL")),
         ):
             lbtn = QtWidgets.QToolButton()
             lbtn.setObjectName("MayaToolBoxBtn")
-            lbtn.setIcon(icons.get_icon(lay_icon, 18))
-            lbtn.setIconSize(QtCore.QSize(18, 18))
-            lbtn.setFixedSize(28, 26)
+            lbtn.setIcon(icons.get_icon(lay_icon, 16))
+            lbtn.setIconSize(QtCore.QSize(16, 16))
+            lbtn.setFixedSize(32, 24)
             lbtn.setToolTip(lay_tip)
             lbtn.clicked.connect(lay_cb)
             tblay.addWidget(lbtn)
 
         hlay.addWidget(toolbox)
 
-        # --- Right Pane: Maya DAG Outliner ---
+        # --- Right Pane: Maya DAG Outliner + Bottom Display Layers ---
         outliner_pane = QtWidgets.QFrame()
         olay = QtWidgets.QVBoxLayout(outliner_pane)
-        olay.setContentsMargins(2, 2, 2, 2)
-        olay.setSpacing(2)
+        olay.setContentsMargins(0, 0, 0, 0)
+        olay.setSpacing(0)
 
+        # 1. `28px` OUTLINER Header (`#2A2E35`)
         hdr = QtWidgets.QFrame()
         hdr.setObjectName("MayaSectionHeader")
+        hdr.setFixedHeight(28)
         hrow = QtWidgets.QHBoxLayout(hdr)
-        hrow.setContentsMargins(5, 2, 4, 2)
-        lbl = QtWidgets.QLabel("OUTLINER (DAG)")
+        hrow.setContentsMargins(8, 0, 6, 0)
+        lbl = QtWidgets.QLabel("OUTLINER")
         lbl.setObjectName("MayaSectionTitle")
         self.chk_shapes = QtWidgets.QCheckBox("Shapes")
         self.chk_shapes.setChecked(True)
+        self.chk_shapes.setStyleSheet("font-size: 9px; color: #8D949D; background: transparent;")
         self.chk_shapes.setToolTip("Display expandable [+] Shape & Modifier nodes under Transform nodes")
         self.chk_shapes.toggled.connect(lambda _: self.refresh())
+        self.btn_unparent = QtWidgets.QPushButton("↑Root")
+        self.btn_unparent.setFixedHeight(18)
+        self.btn_unparent.setToolTip("Unparent selected object to World root (Shift+P) preserving world transform")
+        self.btn_unparent.clicked.connect(self._on_unparent_clicked)
         hrow.addWidget(lbl)
         hrow.addStretch(1)
         hrow.addWidget(self.chk_shapes)
+        hrow.addWidget(self.btn_unparent)
         olay.addWidget(hdr)
 
-        # Search filter + Unparent to World button
-        srow = QtWidgets.QHBoxLayout()
-        srow.setContentsMargins(2, 1, 2, 1)
-        srow.setSpacing(2)
+        # 2. Recessed Search Box (`#17191C`) with `⌘F` Keycap Badge
+        search_wrap = QtWidgets.QFrame()
+        search_wrap.setStyleSheet("background-color: #22252A; border-bottom: 1px solid #141619;")
+        srow = QtWidgets.QHBoxLayout(search_wrap)
+        srow.setContentsMargins(6, 4, 6, 4)
+        srow.setSpacing(4)
         self.txt_search = QtWidgets.QLineEdit()
-        self.txt_search.setPlaceholderText("Filter DAG nodes...")
+        self.txt_search.setPlaceholderText("⌕  Filter by name or type...")
+        self.txt_search.setFixedHeight(22)
         self.txt_search.textChanged.connect(lambda _: self.refresh())
-        self.btn_unparent = QtWidgets.QPushButton("Unparent")
-        self.btn_unparent.setToolTip("Unparent selected object to World root (Shift+P) preserving world transform")
-        self.btn_unparent.setFixedHeight(20)
-        self.btn_unparent.clicked.connect(self._on_unparent_clicked)
+        lbl_kbd = QtWidgets.QLabel("⌘F")
+        lbl_kbd.setStyleSheet(
+            "background-color: #23272D; color: #68717C; border: 1px solid #353A42; "
+            "border-radius: 2px; font-size: 8px; padding: 1px 4px; font-family: Consolas, monospace;"
+        )
         srow.addWidget(self.txt_search, 1)
-        srow.addWidget(self.btn_unparent)
-        olay.addLayout(srow)
+        srow.addWidget(lbl_kbd)
+        olay.addWidget(search_wrap)
 
+        # 3. `20px` Column Subheader (`SCENE HIERARCHY` | `TYPE`)
+        subhdr = QtWidgets.QFrame()
+        subhdr.setObjectName("MayaColumnSubheader")
+        subhdr.setFixedHeight(20)
+        sublay = QtWidgets.QHBoxLayout(subhdr)
+        sublay.setContentsMargins(8, 0, 8, 0)
+        lbl_sh = QtWidgets.QLabel("SCENE HIERARCHY")
+        lbl_sh.setObjectName("MayaFieldTag")
+        lbl_tp = QtWidgets.QLabel("TYPE")
+        lbl_tp.setObjectName("MayaFieldTag")
+        sublay.addWidget(lbl_sh)
+        sublay.addStretch(1)
+        sublay.addWidget(lbl_tp)
+        olay.addWidget(subhdr)
+
+        # 4. DAG Tree Widget
         self.tree = _create_dag_tree_widget(
             on_reparent_drop=self._on_tree_reparent,
             on_selection_changed=self._on_tree_selection_changed,
         )
         olay.addWidget(self.tree, 1)
 
+        # 5. Bottom `DISPLAY LAYERS` Subpanel (matching Figma Make `.layer-mini`)
+        layer_box = QtWidgets.QFrame()
+        layer_box.setStyleSheet("background-color: #1E2126; border-top: 1px solid #141619;")
+        lblay = QtWidgets.QVBoxLayout(layer_box)
+        lblay.setContentsMargins(0, 0, 0, 2)
+        lblay.setSpacing(1)
+
+        lhead = QtWidgets.QFrame()
+        lhead.setObjectName("MayaSectionHeader")
+        lhead.setFixedHeight(24)
+        lhlay = QtWidgets.QHBoxLayout(lhead)
+        lhlay.setContentsMargins(8, 0, 6, 0)
+        ltitle = QtWidgets.QLabel("DISPLAY LAYERS")
+        ltitle.setObjectName("MayaSectionTitle")
+        btn_add_layer = QtWidgets.QPushButton("+")
+        btn_add_layer.setFixedSize(18, 18)
+        btn_add_layer.setToolTip("Create Display Layer from Selected Objects")
+        btn_add_layer.clicked.connect(self._on_add_display_layer)
+        lhlay.addWidget(ltitle)
+        lhlay.addStretch(1)
+        lhlay.addWidget(btn_add_layer)
+        lblay.addWidget(lhead)
+
+        self.layer_rows_container = QtWidgets.QWidget()
+        self.layer_rows_lay = QtWidgets.QVBoxLayout(self.layer_rows_container)
+        self.layer_rows_lay.setContentsMargins(6, 2, 6, 2)
+        self.layer_rows_lay.setSpacing(2)
+        lblay.addWidget(self.layer_rows_container)
+
+        olay.addWidget(layer_box)
         hlay.addWidget(outliner_pane, 1)
 
-    def _make_toolbox_button(self, tool_id: str, icon_name: str, tip: str):
-        from qtpy import QtCore, QtWidgets
+    def _make_toolbox_button(self, tool_id: str, icon_name: str, key_hint: str, tip: str):
+        from qtpy import QtCore, QtGui, QtWidgets
 
         parent_self = self
 
@@ -382,14 +548,65 @@ class MayaLeftSidebarWidget:
                 desktop.cycle_right_dock("TOOL_SETTINGS")
                 event.accept()
 
+            def paintEvent(self, event):
+                super().paintEvent(event)
+                p = QtGui.QPainter(self)
+                p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+                if self.isChecked():
+                    # Figma Make `.rail-tool.active::before` left glowing Maya-teal bar
+                    p.fillRect(0, 4, 2, self.height() - 8, QtGui.QColor("#38A3D8"))
+                if key_hint:
+                    f = p.font()
+                    f.setFamily("Consolas")
+                    f.setPixelSize(7)
+                    f.setBold(True)
+                    p.setFont(f)
+                    p.setPen(QtGui.QColor("#8ECAE6" if self.isChecked() else "#68717A"))
+                    p.drawText(
+                        QtCore.QRectF(0, 0, self.width() - 3, self.height() - 2),
+                        QtCore.Qt.AlignRight | QtCore.Qt.AlignBottom,
+                        key_hint,
+                    )
+                p.end()
+
         btn = _ToolBoxBtn()
         btn.setObjectName("MayaToolBoxBtn")
         btn.setCheckable(True)
-        btn.setIcon(icons.get_icon(icon_name, 20))
-        btn.setIconSize(QtCore.QSize(20, 20))
-        btn.setFixedSize(28, 28)
+        btn.setIcon(icons.get_icon(icon_name, 18))
+        btn.setIconSize(QtCore.QSize(18, 18))
+        btn.setFixedSize(32, 32)
         btn.setToolTip(tip)
         btn.clicked.connect(lambda _=False, t=tool_id: parent_self._activate_tool(t))
+        return btn
+
+    def _make_rail_action_button(self, icon_name: str, key_hint: str, tip: str, cb):
+        from qtpy import QtCore, QtGui, QtWidgets
+
+        class _RailActionBtn(QtWidgets.QToolButton):
+            def paintEvent(self, event):
+                super().paintEvent(event)
+                if key_hint:
+                    p = QtGui.QPainter(self)
+                    f = p.font()
+                    f.setFamily("Consolas")
+                    f.setPixelSize(7)
+                    f.setBold(True)
+                    p.setFont(f)
+                    p.setPen(QtGui.QColor("#68717A"))
+                    p.drawText(
+                        QtCore.QRectF(0, 0, self.width() - 3, self.height() - 2),
+                        QtCore.Qt.AlignRight | QtCore.Qt.AlignBottom,
+                        key_hint,
+                    )
+                    p.end()
+
+        btn = _RailActionBtn()
+        btn.setObjectName("MayaToolBoxBtn")
+        btn.setIcon(icons.get_icon(icon_name, 17))
+        btn.setIconSize(QtCore.QSize(17, 17))
+        btn.setFixedSize(32, 32)
+        btn.setToolTip(tip)
+        btn.clicked.connect(cb)
         return btn
 
     def _activate_tool(self, tool_id: str) -> None:
@@ -408,6 +625,7 @@ class MayaLeftSidebarWidget:
             btn.blockSignals(True)
             btn.setChecked(tid == cur)
             btn.blockSignals(False)
+            btn.update()
 
     def _on_quick_layout(self, action: str) -> None:
         import bpy
@@ -421,6 +639,73 @@ class MayaLeftSidebarWidget:
             from . import shelf
 
             shelf.execute_shelf_item("center_pivot")
+        elif action == "SOFT_SELECT":
+            from . import shelf
+
+            shelf.execute_shelf_item("smooth_3")
+
+    def _on_add_display_layer(self) -> None:
+        channel_box_ext.create_display_layer(assign_selected=True)
+        channel_box_ext.refresh_channel_box_extensions()
+        self._refresh_display_layers_mini()
+
+    def _refresh_display_layers_mini(self) -> None:
+        from qtpy import QtCore, QtWidgets
+
+        while self.layer_rows_lay.count():
+            it = self.layer_rows_lay.takeAt(0)
+            if it and it.widget():
+                it.widget().deleteLater()
+
+        layers = channel_box_ext.list_display_layers()
+        # Always show `defaultLayer` plus up to 3 authored layers (matching Figma Make `.layer-mini`)
+        rows_data = [{"name": "defaultLayer", "visible": True, "display_type": "N", "color": "#62B1DF"}]
+        palette = ("#D779A8", "#CBAC5F", "#58B1DB", "#75D08B")
+        for idx, lyr in enumerate(layers[:3]):
+            rows_data.append(
+                {
+                    "name": lyr["name"],
+                    "visible": lyr.get("visible", True),
+                    "display_type": lyr.get("display_type", "N"),
+                    "color": palette[idx % len(palette)],
+                }
+            )
+        if len(rows_data) == 1:
+            rows_data.append({"name": "geo_primary", "visible": True, "display_type": "V", "color": "#D779A8"})
+            rows_data.append({"name": "reference", "visible": True, "display_type": "R", "color": "#CBAC5F"})
+
+        for r in rows_data:
+            row_w = QtWidgets.QFrame()
+            row_w.setFixedHeight(20)
+            rlay = QtWidgets.QHBoxLayout(row_w)
+            rlay.setContentsMargins(2, 1, 2, 1)
+            rlay.setSpacing(6)
+
+            lbl_eye = QtWidgets.QLabel("👁" if r["visible"] else "—")
+            lbl_eye.setStyleSheet("color: #8D949D; font-size: 9px;")
+            lbl_eye.setFixedWidth(14)
+
+            swatch = QtWidgets.QFrame()
+            swatch.setFixedSize(4, 13)
+            swatch.setStyleSheet(f"background-color: {r['color']}; border-radius: 1px;")
+
+            lbl_name = QtWidgets.QLabel(r["name"])
+            lbl_name.setStyleSheet("color: #C9CDD3; font-size: 9.5px;")
+
+            mode_char = "V" if r["display_type"] == "N" else r["display_type"]
+            lbl_mode = QtWidgets.QLabel(mode_char)
+            lbl_mode.setAlignment(QtCore.Qt.AlignCenter)
+            lbl_mode.setFixedSize(16, 15)
+            lbl_mode.setStyleSheet(
+                "background-color: #191C20; color: #7E8791; border: 1px solid #30353C; "
+                "border-radius: 2px; font-family: Consolas, monospace; font-size: 8px; font-weight: bold;"
+            )
+
+            rlay.addWidget(lbl_eye)
+            rlay.addWidget(swatch)
+            rlay.addWidget(lbl_name, 1)
+            rlay.addWidget(lbl_mode)
+            self.layer_rows_lay.addWidget(row_w)
 
     def _on_unparent_clicked(self) -> None:
         import bpy
@@ -468,9 +753,10 @@ class MayaLeftSidebarWidget:
 
         kind = node["kind"]
         if kind == "SHAPE":
-            label = f"{node['name']}  [{node['shape_type']}]"
+            label = f"{node['name']}"
             item = QtWidgets.QTreeWidgetItem([label])
             item.setData(0, QtCore.Qt.UserRole, node["owner_object"])
+            item.setData(0, _ROLE_NODE_BADGE, node.get("badge", "SHP"))
             icon_map = {
                 "MESH": "dag_mesh",
                 "CAMERA": "dag_camera",
@@ -483,9 +769,10 @@ class MayaLeftSidebarWidget:
             return item
 
         if kind == "MODIFIER":
-            label = f"{node['name']}  ({node['modifier_type']})"
+            label = f"{node['name']}"
             item = QtWidgets.QTreeWidgetItem([label])
             item.setData(0, QtCore.Qt.UserRole, node["owner_object"])
+            item.setData(0, _ROLE_NODE_BADGE, node.get("badge", "MOD"))
             item.setIcon(0, icons.get_icon("dag_modifier", 14))
             item.setForeground(0, QtGui.QBrush(QtGui.QColor("#7ED491")))
             return item
@@ -493,6 +780,8 @@ class MayaLeftSidebarWidget:
         # TRANSFORM node
         item = QtWidgets.QTreeWidgetItem([node["name"]])
         item.setData(0, QtCore.Qt.UserRole, node["name"])
+        item.setData(0, _ROLE_NODE_BADGE, node.get("badge", "MSH"))
+        item.setData(0, _ROLE_NODE_LINKED, bool(node.get("linked")))
         item.setIcon(0, icons.get_icon("dag_transform", 15))
         font = item.font(0)
         font.setBold(bool(node.get("selected")))
@@ -500,9 +789,9 @@ class MayaLeftSidebarWidget:
         if node.get("linked"):
             item.setForeground(0, QtGui.QBrush(QtGui.QColor("#F2B857")))
         elif node.get("selected"):
-            item.setForeground(0, QtGui.QBrush(QtGui.QColor("#66E0A3")))
+            item.setForeground(0, QtGui.QBrush(QtGui.QColor("#EDF7FA")))
         else:
-            item.setForeground(0, QtGui.QBrush(QtGui.QColor("#E4E8EE")))
+            item.setForeground(0, QtGui.QBrush(QtGui.QColor("#C9CDD3")))
 
         for ch in node.get("children", ()):
             ch_item = self._populate_node_item(ch)
@@ -521,6 +810,7 @@ class MayaLeftSidebarWidget:
         self._updating = True
         try:
             self._sync_toolbox_highlight()
+            self._refresh_display_layers_mini()
             snap = get_dag_outliner_snapshot(
                 filter_text=self.txt_search.text(),
                 show_shapes=self.chk_shapes.isChecked(),
@@ -543,9 +833,9 @@ class MayaLeftSidebarWidget:
 
 
 class LeftOutlinerQtDock:
-    """Left-column `WS_CHILD` dock manager embedding `MayaLeftSidebarWidget` (Tool Box + DAG Outliner)."""
+    """Left-column `WS_CHILD` dock manager embedding `MayaLeftSidebarWidget` (Tool Box Rail + DAG Outliner)."""
 
-    DEFAULT_WIDTH = 240
+    DEFAULT_WIDTH = 247
 
     def __init__(self):
         from blendertk.ui_utils.qt_dock import QtDock
@@ -581,7 +871,6 @@ class LeftOutlinerQtDock:
         import bpy
         from blendertk.ui_utils._ui_utils import _UiUtilsInternal
 
-        # If a left-side OUTLINER area already exists (x < window.width * 0.35), reuse it
         existing_left = [
             a
             for a in window.screen.areas
@@ -590,7 +879,6 @@ class LeftOutlinerQtDock:
         if existing_left:
             return min(existing_left, key=lambda a: a.x), False
 
-        # Close redundant right-side stock Blender OUTLINER so right PROPERTIES spans full height!
         right_outliners = [
             a
             for a in window.screen.areas
@@ -611,7 +899,6 @@ class LeftOutlinerQtDock:
         if target.width <= width + 180:
             return None, False
 
-        # In Blender VERTICAL split, factor is the left fraction
         factor = max(0.14, min(0.42, float(width) / float(target.width)))
         before = {a.as_pointer() for a in window.screen.areas}
         try:

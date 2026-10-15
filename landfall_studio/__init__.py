@@ -18,14 +18,14 @@ try:
 except ImportError:  # Allow standalone Python CLI tools to import landfall_studio.bootstrap
     bpy = None
 
-from . import character, commands, diagnostics, keymaps, modeling, ui, viewport
+from . import character, commands, diagnostics, interchange, keymaps, modeling, ui, viewport
 from .adapters import blendertk_bridge, landfall_bridge, tentacle_bridge, workspace_bridge
 from .bootstrap import deps, paths
 
 bl_info = {
     "name": "Landfall Studio",
     "author": "Framedworld",
-    "version": (0, 6, 0),
+    "version": (0, 7, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar (N) > Landfall | Preferences > Add-ons > Landfall Studio",
     "description": "Unified Maya-oriented Blender environment (Landfall + Tentacle + blendertk)",
@@ -315,9 +315,10 @@ def register():
     # 1. Pre-flight check of paths and dependencies (never triggers pip install)
     dep_status = deps.check_dependencies()
 
-    # 2. Register Studio operators (bootstrap, viewport interaction, marking menus, keymap profile, Qt UI desktop, character)
+    # 2. Register Studio operators (bootstrap, viewport interaction, marking menus, keymap profile, Qt UI desktop, character, interchange)
     for cls in STUDIO_CLASSES:
         bpy.utils.register_class(cls)
+    interchange.register_interchange_operators()
     viewport.register_marking_menu_handlers()
     viewport.register_hud_handler()
     character.register_handlers()
@@ -407,6 +408,10 @@ def unregister():
         print(f"[landfall_studio] landfall_bridge unregister warning: {exc}")
 
     # 6. Unregister Studio operators
+    try:
+        interchange.unregister_interchange_operators()
+    except Exception:
+        pass
     for cls in reversed(STUDIO_CLASSES):
         try:
             bpy.utils.unregister_class(cls)

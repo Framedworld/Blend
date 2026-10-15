@@ -573,7 +573,9 @@ def restore_panel(panel_id: str) -> Dict[str, Any]:
 
 
 def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
-    """Cycle the right-hand dock (`Ctrl+A` in Maya) between `CHANNEL_BOX`, `MODELING_TOOLKIT`, `SHAPE_EDITOR`, `ATTRIBUTE_EDITOR`, `TOOL_SETTINGS`, `NATIVE_PROPERTIES`, or `HIDDEN`."""
+    """Cycle the right-hand dock (`Ctrl+A` in Maya) between `CHANNEL_BOX`, `MODELING_TOOLKIT`, `SHAPE_EDITOR`, `MAYA_INTERCHANGE`, `ATTRIBUTE_EDITOR`, `TOOL_SETTINGS`, `NATIVE_PROPERTIES`, or `HIDDEN`."""
+    from . import interchange_panel
+
     rdock = _get_right_dock()
     widget, slots = get_panel_widget_and_slots("channels")
     if widget is None:
@@ -588,7 +590,16 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
         order = ("CHANNEL_BOX", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "HIDDEN")
         idx = (order.index(cur) + 1) % len(order) if cur in order else 0
         next_mode = order[idx]
-    elif req in ("CHANNEL_BOX", "MODELING_TOOLKIT", "SHAPE_EDITOR", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "NATIVE_PROPERTIES", "HIDDEN"):
+    elif req in (
+        "CHANNEL_BOX",
+        "MODELING_TOOLKIT",
+        "SHAPE_EDITOR",
+        "MAYA_INTERCHANGE",
+        "ATTRIBUTE_EDITOR",
+        "TOOL_SETTINGS",
+        "NATIVE_PROPERTIES",
+        "HIDDEN",
+    ):
         next_mode = req
     else:
         next_mode = "CHANNEL_BOX"
@@ -600,6 +611,9 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
         rdock.show_modeling_toolkit()
     elif next_mode == "SHAPE_EDITOR":
         rdock.show_shape_editor()
+    elif next_mode == "MAYA_INTERCHANGE":
+        rdock.show_maya_interchange()
+        interchange_panel.refresh_interchange_widgets()
     elif next_mode == "ATTRIBUTE_EDITOR":
         rdock.show_attribute_editor(properties_context="OBJECT")
         attribute_editor.refresh_attribute_editor()
@@ -778,16 +792,19 @@ def _compute_selection_value_sig() -> Tuple[Any, ...]:
 
 
 def _on_live_scene_or_depsgraph_update(*_args) -> None:
-    """Refresh `Channels`, `SHAPES/INPUTS`, `Display Layers`, `Modeling Toolkit`, `Shape Editor`, `Time Slider`, `Attribute Editor`, `Tool Settings`, and `Outliner`."""
+    """Refresh `Channels`, `SHAPES/INPUTS`, `Display Layers`, `Modeling Toolkit`, `Shape Editor`, `Maya Interchange`, `Time Slider`, `Attribute Editor`, `Tool Settings`, and `Outliner`."""
     global _last_selection_value_sig
     sig = _compute_selection_value_sig()
     if sig == _last_selection_value_sig:
         return
     _last_selection_value_sig = sig
+    from . import interchange_panel
+
     sync_channels_now()
     channel_box_ext.refresh_channel_box_extensions()
     modeling_toolkit.refresh_modeling_toolkit_widgets()
     shape_editor.refresh_shape_editor_widgets()
+    interchange_panel.refresh_interchange_widgets()
     time_slider.refresh_time_slider_widgets()
     shelf.refresh_top_shelf_status()
     attribute_editor.refresh_attribute_editor()
@@ -1211,6 +1228,11 @@ def set_command_feedback(
     if echo_to_console:
         print(f"// Result: {_command_feedback['result']} ({_command_feedback['command']})")
 
+    try:
+        time_slider.refresh_time_slider_widgets()
+    except Exception:
+        pass
+
     return dict(_command_feedback)
 
 
@@ -1382,6 +1404,7 @@ if bpy is not None:
                 ("CHANNEL_BOX", "Channel Box", "Show the docked Qt Channel Box"),
                 ("MODELING_TOOLKIT", "Modeling Toolkit", "Show the Maya Modeling Toolkit"),
                 ("SHAPE_EDITOR", "Shape / Skin Editor", "Show the Maya Shape Editor & Skin Weights dock"),
+                ("MAYA_INTERCHANGE", "Maya Interchange & References", "Show the Maya .ma/.mb Interchange & Reference Manager"),
                 ("ATTRIBUTE_EDITOR", "Attribute Editor", "Show the Maya Attribute Editor"),
                 ("TOOL_SETTINGS", "Tool Settings", "Show the Maya Tool Settings & Option Box inspector"),
                 ("NATIVE_PROPERTIES", "Native Properties", "Show native Blender Properties editor"),

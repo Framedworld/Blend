@@ -70,7 +70,7 @@ def _collect_scene_timeline_state() -> Dict[str, Any]:
 
 
 class MayaTimeSliderController:
-    """Controller and custom-painted Qt widget for the Modern Maya Time Slider + Range Slider."""
+    """Controller and custom-painted Qt widget for the Figma Make 3-Row Bottom Chrome (`Time Slider` + `Range Slider` + `MEL/PY Command & Result Bar`)."""
 
     def __init__(self):
         from qtpy import QtCore, QtGui, QtWidgets
@@ -97,11 +97,11 @@ class MayaTimeSliderController:
         ctrl = self
 
         class _MayaTimeScrubBar(QtWidgets.QWidget):
-            """Custom-painted Maya Time Slider track with frame ticks, red/cyan keyframe ticks, and blue playhead."""
+            """Custom-painted Figma Make Maya Time Slider track with frame ticks, `#E35D6A` red transform ticks, `#5AC8DB` cyan morph ticks, and `#38A3D8` playhead."""
 
             def __init__(self, parent=None):
                 super().__init__(parent)
-                self.setMinimumHeight(28)
+                self.setMinimumHeight(24)
                 self.setCursor(QtCore.Qt.PointingHandCursor)
                 self.frame_start = 1
                 self.frame_end = 100
@@ -139,9 +139,9 @@ class MayaTimeSliderController:
                 w = self.width()
                 h = self.height()
 
-                # Recessed dark Maya Time Slider background
-                p.fillRect(0, 0, w, h, QtGui.QColor("#17191C"))
-                p.setPen(QtGui.QColor("#2C313A"))
+                # Recessed dark Figma Make Time Slider background (#16181B)
+                p.fillRect(0, 0, w, h, QtGui.QColor("#16181B"))
+                p.setPen(QtGui.QColor("#2A2E35"))
                 p.drawRect(0, 0, w - 1, h - 1)
 
                 span = max(1, self.frame_end - self.frame_start)
@@ -158,38 +158,38 @@ class MayaTimeSliderController:
                     is_major = (f == self.frame_start) or (f == self.frame_end) or (f % major_step == 0)
                     if is_major:
                         p.setPen(QtGui.QColor("#484F58"))
-                        p.drawLine(x, h - 11, x, h - 2)
-                        p.setPen(QtGui.QColor("#8B949E"))
+                        p.drawLine(x, h - 10, x, h - 2)
+                        p.setPen(QtGui.QColor("#7D8590"))
                         p.drawText(x + 3, 10, str(f))
                     elif f % minor_step == 0:
-                        p.setPen(QtGui.QColor("#2B3038"))
-                        p.drawLine(x, h - 6, x, h - 2)
+                        p.setPen(QtGui.QColor("#292E35"))
+                        p.drawLine(x, h - 5, x, h - 2)
 
-                # Draw red object/transform keyframe ticks
+                # Draw Figma Make #E35D6A red object/transform keyframe ticks
                 for kf in self.transform_keys:
                     if self.frame_start <= kf <= self.frame_end:
                         kx = int(round(self._frame_to_x(kf, w)))
-                        p.fillRect(kx - 1, 2, 3, h - 4, QtGui.QColor("#E5484D"))
+                        p.fillRect(kx - 1, 2, 3, h - 4, QtGui.QColor("#E35D6A"))
 
-                # Draw cyan/emerald Shape Key morph keyframe ticks
+                # Draw Figma Make #5AC8DB cyan Shape Key morph keyframe ticks
                 for skf in self.shape_keys:
                     if self.frame_start <= skf <= self.frame_end:
                         kx = int(round(self._frame_to_x(skf, w)))
-                        p.fillRect(kx - 1, 3, 3, h - 6, QtGui.QColor("#38A3D8"))
-                        p.fillRect(kx - 2, h - 6, 5, 4, QtGui.QColor("#56D364"))
+                        p.fillRect(kx - 1, 3, 3, h - 6, QtGui.QColor("#5AC8DB"))
+                        p.fillRect(kx - 2, h - 5, 5, 3, QtGui.QColor("#3FB950"))
 
-                # Draw Maya-Blue Current Frame Playhead Pill
+                # Draw Figma Make #38A3D8 Current Frame Playhead Pill + Line
                 cx = int(round(self._frame_to_x(self.frame_current, w)))
                 pill_w = 28
                 pill_x = max(2, min(w - pill_w - 2, cx - pill_w // 2))
-                p.fillRect(pill_x, 1, pill_w, h - 2, QtGui.QColor(56, 163, 216, 75))
-                p.setPen(QtGui.QPen(QtGui.QColor("#38A3D8"), 1.5))
+                p.fillRect(pill_x, 1, pill_w, h - 2, QtGui.QColor(56, 163, 216, 70))
+                p.setPen(QtGui.QPen(QtGui.QColor("#38A3D8"), 1.6))
                 p.drawLine(cx, 1, cx, h - 2)
 
                 badge_rect = QtCore.QRectF(pill_x, 2, pill_w, 13)
-                p.setBrush(QtGui.QColor("#246892"))
-                p.setPen(QtGui.QColor("#58A6FF"))
-                p.drawRoundedRect(badge_rect, 2.0, 2.0)
+                p.setBrush(QtGui.QColor("#236892"))
+                p.setPen(QtGui.QColor("#69B8DC"))
+                p.drawRoundedRect(badge_rect, 2.5, 2.5)
 
                 font.setBold(True)
                 p.setFont(font)
@@ -198,11 +198,11 @@ class MayaTimeSliderController:
                 p.end()
 
         class _MayaRangeSliderBar(QtWidgets.QWidget):
-            """Custom-painted Maya Range Slider bar with end-grip boxes and range label."""
+            """Custom-painted Figma Make Maya Range Slider bar with end-grip boxes and range label."""
 
             def __init__(self, parent=None):
                 super().__init__(parent)
-                self.setFixedHeight(18)
+                self.setFixedHeight(17)
                 self.frame_start = 1
                 self.frame_end = 100
 
@@ -214,13 +214,13 @@ class MayaTimeSliderController:
 
                 p.fillRect(0, 0, w, h, QtGui.QColor("#16181B"))
                 bar_rect = QtCore.QRectF(4, 2, max(16, w - 8), h - 4)
-                p.setBrush(QtGui.QColor("#2A2F37"))
-                p.setPen(QtGui.QColor("#3D4450"))
+                p.setBrush(QtGui.QColor("#27303A"))
+                p.setPen(QtGui.QColor("#384654"))
                 p.drawRoundedRect(bar_rect, 2.0, 2.0)
 
-                # Left and right Maya range grip handles
-                p.fillRect(6, 4, 8, h - 8, QtGui.QColor("#58A6FF"))
-                p.fillRect(max(16, w - 14), 4, 8, h - 8, QtGui.QColor("#58A6FF"))
+                # Left and right Figma Make range grip handles
+                p.fillRect(6, 4, 8, h - 8, QtGui.QColor("#69B8DC"))
+                p.fillRect(max(16, w - 14), 4, 8, h - 8, QtGui.QColor("#69B8DC"))
 
                 font = p.font()
                 font.setPixelSize(9)
@@ -229,7 +229,7 @@ class MayaTimeSliderController:
                 p.drawText(
                     bar_rect,
                     QtCore.Qt.AlignCenter,
-                    f"Playback Range: {self.frame_start}  ..  {self.frame_end}",
+                    f"Playback Range: {self.frame_start}  —  {self.frame_end}   (Scene: 1 — 240)",
                 )
                 p.end()
 
@@ -237,18 +237,28 @@ class MayaTimeSliderController:
         v_layout.setContentsMargins(6, 2, 6, 2)
         v_layout.setSpacing(2)
 
-        # Row 1: Time Slider + Frame Spin + Transport Controls + Set Key / Auto Key
+        # Row 1: TIME Readout Box + Time Slider + Frame Spin + Transport Controls + Set Key [S] + Auto Key + 24 fps
         row1 = QtWidgets.QHBoxLayout()
         row1.setContentsMargins(0, 0, 0, 0)
         row1.setSpacing(4)
+
+        self.lbl_time_badge = QtWidgets.QLabel("TIME  1.00", self.root)
+        self.lbl_time_badge.setFixedWidth(78)
+        self.lbl_time_badge.setFixedHeight(22)
+        self.lbl_time_badge.setAlignment(QtCore.Qt.AlignCenter)
+        self.lbl_time_badge.setStyleSheet(
+            "background-color: #16181B; color: #69B8DC; border: 1px solid #2E343D; "
+            "border-radius: 3px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 10px; font-weight: 700;"
+        )
+        row1.addWidget(self.lbl_time_badge)
 
         self.scrub_bar = _MayaTimeScrubBar(self.root)
         row1.addWidget(self.scrub_bar, 1)
 
         self.spin_current = QtWidgets.QSpinBox(self.root)
         self.spin_current.setRange(-10000, 100000)
-        self.spin_current.setFixedWidth(54)
-        self.spin_current.setFixedHeight(22)
+        self.spin_current.setFixedWidth(52)
+        self.spin_current.setFixedHeight(21)
         self.spin_current.setToolTip("Current Frame")
         self.spin_current.valueChanged.connect(self._on_spin_current_changed)
         row1.addWidget(self.spin_current)
@@ -263,22 +273,26 @@ class MayaTimeSliderController:
         ):
             b = QtWidgets.QPushButton(lbl, self.root)
             b.setToolTip(tip)
-            b.setFixedHeight(22)
-            b.setFixedWidth(36 if lbl == "Play" else 24)
+            b.setFixedHeight(21)
+            b.setFixedWidth(36 if lbl == "Play" else 23)
+            if lbl == "Play":
+                b.setStyleSheet(
+                    "background-color: #1F4E70; color: #FFFFFF; border: 1px solid #38A3D8; font-weight: 700;"
+                )
             b.clicked.connect(fn)
             row1.addWidget(b)
 
         self.btn_set_key = QtWidgets.QPushButton("Set Key [S]", self.root)
-        self.btn_set_key.setFixedHeight(22)
+        self.btn_set_key.setFixedHeight(21)
         self.btn_set_key.setStyleSheet(
             "background-color: #214D72; color: #E6EDF3; border: 1px solid #38A3D8; font-weight: 700; padding: 0 7px;"
         )
         self.btn_set_key.clicked.connect(self._on_set_key)
         row1.addWidget(self.btn_set_key)
 
-        self.btn_auto_key = QtWidgets.QPushButton("Auto Key", self.root)
+        self.btn_auto_key = QtWidgets.QPushButton("● Auto Key", self.root)
         self.btn_auto_key.setCheckable(True)
-        self.btn_auto_key.setFixedHeight(22)
+        self.btn_auto_key.setFixedHeight(21)
         self.btn_auto_key.clicked.connect(self._on_toggle_auto_key)
         row1.addWidget(self.btn_auto_key)
 
@@ -291,15 +305,20 @@ class MayaTimeSliderController:
 
         v_layout.addLayout(row1)
 
-        # Row 2: Range Slider + Start/Min/Max/End + Command Strip
+        # Row 2: RANGE Label + Start Spin + Range Slider Bar + End Spin + Key Summary
         row2 = QtWidgets.QHBoxLayout()
         row2.setContentsMargins(0, 0, 0, 0)
         row2.setSpacing(4)
 
+        lbl_rng = QtWidgets.QLabel("RANGE", self.root)
+        lbl_rng.setFixedWidth(42)
+        lbl_rng.setStyleSheet("color: #7D8590; font-size: 9px; font-weight: 700; letter-spacing: 0.6px;")
+        row2.addWidget(lbl_rng)
+
         self.spin_start = QtWidgets.QSpinBox(self.root)
         self.spin_start.setRange(-10000, 100000)
-        self.spin_start.setFixedWidth(48)
-        self.spin_start.setFixedHeight(19)
+        self.spin_start.setFixedWidth(46)
+        self.spin_start.setFixedHeight(18)
         self.spin_start.setToolTip("Playback Start Frame")
         self.spin_start.valueChanged.connect(self._on_range_spin_changed)
         row2.addWidget(self.spin_start)
@@ -309,20 +328,61 @@ class MayaTimeSliderController:
 
         self.spin_end = QtWidgets.QSpinBox(self.root)
         self.spin_end.setRange(-10000, 100000)
-        self.spin_end.setFixedWidth(52)
-        self.spin_end.setFixedHeight(19)
+        self.spin_end.setFixedWidth(50)
+        self.spin_end.setFixedHeight(18)
         self.spin_end.setToolTip("Playback End Frame")
         self.spin_end.valueChanged.connect(self._on_range_spin_changed)
         row2.addWidget(self.spin_end)
 
         self.lbl_key_summary = QtWidgets.QLabel("Keys: 0", self.root)
         self.lbl_key_summary.setStyleSheet(
-            "background-color: #16181B; color: #58A6FF; border: 1px solid #2A3441; "
+            "background-color: #16181B; color: #69B8DC; border: 1px solid #2A3441; "
             "border-radius: 2px; padding: 1px 8px; font-size: 10px; font-weight: 600;"
         )
         row2.addWidget(self.lbl_key_summary)
 
         v_layout.addLayout(row2)
+
+        # Row 3: Figma Make Bottom MEL / PY Command & Result Bar (22px)
+        row3 = QtWidgets.QHBoxLayout()
+        row3.setContentsMargins(0, 0, 0, 0)
+        row3.setSpacing(4)
+
+        self.btn_cmd_lang = QtWidgets.QPushButton("MEL  |  PY", self.root)
+        self.btn_cmd_lang.setFixedSize(64, 19)
+        self.btn_cmd_lang.setToolTip("Execute Python / MEL Command Expression")
+        self.btn_cmd_lang.setStyleSheet(
+            "background-color: #1D2126; color: #69B8DC; border: 1px solid #30363F; "
+            "border-radius: 2px; font-size: 9px; font-weight: 700;"
+        )
+        row3.addWidget(self.btn_cmd_lang)
+
+        self.txt_command = QtWidgets.QLineEdit(self.root)
+        self.txt_command.setFixedHeight(19)
+        self.txt_command.setPlaceholderText("polyBevel -offset 0.15 -segments 2;   // Enter Python or Studio command...")
+        self.txt_command.setStyleSheet(
+            "background-color: #141619; color: #C8D1DC; border: 1px solid #2A2E35; "
+            "border-radius: 2px; padding: 0 6px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 10px;"
+        )
+        self.txt_command.returnPressed.connect(self._on_command_return_pressed)
+        self.btn_cmd_lang.clicked.connect(self._on_command_return_pressed)
+        row3.addWidget(self.txt_command, 5)
+
+        self.lbl_result = QtWidgets.QLabel("RESULT   // Landfall Studio — Modern Maya Desktop Ready", self.root)
+        self.lbl_result.setFixedHeight(19)
+        self.lbl_result.setStyleSheet(
+            "background-color: #161A1E; color: #4AB866; border: 1px solid #26332B; "
+            "border-radius: 2px; padding: 0 8px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 10px; font-weight: 600;"
+        )
+        row3.addWidget(self.lbl_result, 4)
+
+        self.btn_script_ed = QtWidgets.QPushButton("Script Editor", self.root)
+        self.btn_script_ed.setFixedHeight(19)
+        self.btn_script_ed.setToolTip("Toggle Script Output / Script Editor Console")
+        self.btn_script_ed.clicked.connect(self._on_toggle_script_editor)
+        row3.addWidget(self.btn_script_ed)
+
+        v_layout.addLayout(row3)
 
     def refresh_from_scene(self) -> None:
         if self._updating:
@@ -341,6 +401,7 @@ class MayaTimeSliderController:
             self.range_bar.frame_end = st["frame_end"]
             self.range_bar.update()
 
+            self.lbl_time_badge.setText(f"TIME  {float(st['frame_current']):.2f}")
             self.spin_current.setValue(st["frame_current"])
             self.spin_start.setValue(st["frame_start"])
             self.spin_end.setValue(st["frame_end"])
@@ -350,16 +411,63 @@ class MayaTimeSliderController:
             self.btn_auto_key.setChecked(ak)
             if ak:
                 self.btn_auto_key.setStyleSheet(
-                    "background-color: #4A1D22; color: #FF7B72; border: 1px solid #E5484D; font-weight: 700;"
+                    "background-color: #4A1D22; color: #FF7B72; border: 1px solid #E35D6A; font-weight: 700;"
                 )
             else:
-                self.btn_auto_key.setStyleSheet("")
+                self.btn_auto_key.setStyleSheet(
+                    "background-color: #241C1E; color: #C87A82; border: 1px solid #4A2C31; font-weight: 600;"
+                )
 
             n_t = len(st["transform_key_frames"])
             n_s = len(st["shape_key_frames"])
             self.lbl_key_summary.setText(f"Keys: {n_t} Xform | {n_s} Morph")
+
+            # Sync MEL/PY command feedback readout
+            try:
+                from . import desktop
+
+                fb = desktop.get_command_feedback()
+                res_txt = str(fb.get("result") or "Ready")
+                cmd_txt = str(fb.get("command") or "")
+                is_err = bool(fb.get("is_error"))
+                self.lbl_result.setText(f"RESULT   // {res_txt}")
+                if is_err:
+                    self.lbl_result.setStyleSheet(
+                        "background-color: #28171B; color: #E35D6A; border: 1px solid #582830; "
+                        "border-radius: 2px; padding: 0 8px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 10px; font-weight: 600;"
+                    )
+                else:
+                    self.lbl_result.setStyleSheet(
+                        "background-color: #161A1E; color: #4AB866; border: 1px solid #26332B; "
+                        "border-radius: 2px; padding: 0 8px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 10px; font-weight: 600;"
+                    )
+                if cmd_txt and cmd_txt != "Ready" and not self.txt_command.hasFocus():
+                    self.txt_command.setPlaceholderText(f"{cmd_txt}   // {res_txt}")
+            except Exception:
+                pass
         finally:
             self._updating = False
+
+    def _on_command_return_pressed(self) -> None:
+        expr = self.txt_command.text().strip()
+        if not expr:
+            return
+        try:
+            from . import desktop
+
+            desktop.execute_command_string(expr)
+            self.txt_command.clear()
+        except Exception:
+            pass
+        self.refresh_from_scene()
+
+    def _on_toggle_script_editor(self) -> None:
+        try:
+            import bpy
+
+            bpy.ops.landfall_studio.toggle_script_output()
+        except Exception:
+            pass
 
     def set_current_frame(self, frame: int) -> None:
         try:

@@ -1051,13 +1051,41 @@ def scrub_selected_channels(delta: float, objects: Optional[List[Any]] = None) -
 # --------------------------------------------------------------------------------------
 
 class MayaChannelBoxExtensionWidget:
-    """Controller & Qt sub-panel embedded inside `Channels` providing `SHAPES`, `INPUTS`, and `Display Layers`."""
+    """Controller & Qt sub-panel embedded inside `Channels` providing Figma Make Object Header, `SHAPES`, `INPUTS`, and `Display Layers`."""
 
     def __init__(self, host_channels_widget: Any):
-        from qtpy import QtCore, QtWidgets
+        from qtpy import QtCore, QtGui, QtWidgets
 
         self.host = host_channels_widget
         self._updating = False
+
+        # Figma Make Channel Box Object Header Bar ("body_main_GEO" + "mesh transform")
+        self.obj_header_bar = QtWidgets.QFrame()
+        self.obj_header_bar.setObjectName("MayaSectionHeader")
+        self.obj_header_bar.setFixedHeight(28)
+        oh_lay = QtWidgets.QHBoxLayout(self.obj_header_bar)
+        oh_lay.setContentsMargins(8, 3, 8, 3)
+        oh_lay.setSpacing(6)
+
+        self.lbl_obj_icon = QtWidgets.QLabel()
+        self.lbl_obj_icon.setPixmap(icons.get_icon("dag_mesh", 14).pixmap(14, 14))
+        oh_lay.addWidget(self.lbl_obj_icon)
+
+        self.lbl_obj_name = QtWidgets.QLabel("pCube1")
+        self.lbl_obj_name.setStyleSheet(
+            "color: #FFFFFF; font-size: 11px; font-weight: 700; background: transparent; border: none;"
+        )
+        oh_lay.addWidget(self.lbl_obj_name)
+        oh_lay.addStretch(1)
+
+        self.lbl_obj_subtitle = QtWidgets.QLabel("mesh transform")
+        self.lbl_obj_subtitle.setStyleSheet(
+            "color: #7D8590; font-size: 9px; font-family: 'Cascadia Mono', 'Consolas', monospace; background: transparent; border: none;"
+        )
+        oh_lay.addWidget(self.lbl_obj_subtitle)
+
+        # Install Figma Make X/Y/Z Axis Badge Delegate on tbl000 column 1 (Channel Name)
+        self._install_axis_badge_delegate(host_channels_widget)
 
         self.root = QtWidgets.QFrame(host_channels_widget)
         self.root.setObjectName("MayaChannelBoxExt")
@@ -1092,6 +1120,9 @@ class MayaChannelBoxExtensionWidget:
         shape_edit_row.setContentsMargins(4, 1, 4, 1)
         self.txt_shape_name = QtWidgets.QLineEdit()
         self.txt_shape_name.setPlaceholderText("No Shape Node")
+        self.txt_shape_name.setStyleSheet(
+            "color: #69B8DC; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 11px;"
+        )
         self.txt_shape_name.editingFinished.connect(self._on_shape_renamed)
         shape_edit_row.addWidget(self.txt_shape_name)
         hlay.addLayout(shape_edit_row)
@@ -1179,8 +1210,58 @@ class MayaChannelBoxExtensionWidget:
         self.splitter.addWidget(layer_pane)
         self.splitter.setSizes([160, 125])
 
+    def _install_axis_badge_delegate(self, channels_widget: Any) -> None:
+        """Install a custom `QStyledItemDelegate` on `tbl000` column 1 to draw Figma Make X/Y/Z axis badges (`#E35D6A`, `#4AB866`, `#4E9CE6`)."""
+        try:
+            from qtpy import QtCore, QtGui, QtWidgets
+
+            tbl = getattr(channels_widget, "tbl000", None)
+            if tbl is None or getattr(tbl, "_lf_axis_delegate_installed", False):
+                return
+
+            class _MayaChannelAxisDelegate(QtWidgets.QStyledItemDelegate):
+                AXIS_COLORS = {
+                    "X": QtGui.QColor("#E35D6A"),
+                    "Y": QtGui.QColor("#4AB866"),
+                    "Z": QtGui.QColor("#4E9CE6"),
+                }
+
+                def paint(self, painter: QtGui.QPainter, option, index) -> None:
+                    super().paint(painter, option, index)
+                    txt = str(index.data(QtCore.Qt.DisplayRole) or "").strip()
+                    if not txt:
+                        return
+                    last_ch = txt[-1].upper()
+                    if last_ch in self.AXIS_COLORS and (
+                        txt.endswith(" X")
+                        or txt.endswith(" Y")
+                        or txt.endswith(" Z")
+                        or txt.lower().startswith(("translate", "rotate", "scale"))
+                    ):
+                        painter.save()
+                        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+                        c = self.AXIS_COLORS[last_ch]
+                        r = option.rect
+                        dot_rect = QtCore.QRectF(
+                            float(r.left() + 4),
+                            float(r.center().y() - 3.0),
+                            6.0,
+                            6.0,
+                        )
+                        painter.setPen(QtCore.Qt.NoPen)
+                        painter.setBrush(c)
+                        painter.drawEllipse(dot_rect)
+                        painter.restore()
+
+            delegate = _MayaChannelAxisDelegate(tbl)
+            tbl.setItemDelegateForColumn(1, delegate)
+            tbl._lf_axis_delegate_installed = True
+            tbl._lf_axis_delegate = delegate
+        except Exception:
+            pass
+
     def refresh(self) -> None:
-        """Synchronize `SHAPES`, `INPUTS`, and `Display Layers` from Blender's live scene."""
+        """Synchronize Object Header, `SHAPES`, `INPUTS`, and `Display Layers` from Blender's live scene."""
         if self._updating:
             return
         self._updating = True
@@ -1190,6 +1271,18 @@ class MayaChannelBoxExtensionWidget:
 
             active = getattr(bpy.context.view_layer.objects, "active", None) if bpy.context.view_layer else None
             sinfo = get_object_shape_info(active)
+
+            if active is not None:
+                self.lbl_obj_name.setText(active.name)
+                otype = str(getattr(active, "type", "EMPTY")).lower()
+                sub = f"{otype} transform" if otype != "empty" else "dag group"
+                if sinfo["linked"]:
+                    sub += " (ref)"
+                self.lbl_obj_subtitle.setText(sub)
+            else:
+                self.lbl_obj_name.setText("(No Selection)")
+                self.lbl_obj_subtitle.setText("idle")
+
             self.lbl_shape_type.setText(
                 f"{sinfo['shape_type']} (LINKED)" if sinfo["linked"] else str(sinfo["shape_type"])
             )
@@ -1198,18 +1291,24 @@ class MayaChannelBoxExtensionWidget:
             self.txt_shape_name.setReadOnly(not sinfo["editable"])
             self.txt_shape_name.blockSignals(False)
 
-            # Populate INPUTS tree
+            # Populate INPUTS tree with Figma Make emerald active dot indicator
             self.tree_inputs.blockSignals(True)
             self.tree_inputs.clear()
             inputs = get_object_inputs(active)
             for node in inputs:
-                top = QtWidgets.QTreeWidgetItem([node["node_name"], node["node_type"]])
+                status_prefix = "● " if node.get("show_viewport", True) else "○ "
+                top = QtWidgets.QTreeWidgetItem([node["node_name"], f"{status_prefix}{node['node_type']}"])
                 top.setIcon(0, icons.get_icon("dag_modifier", 14))
                 font = top.font(0)
                 font.setBold(True)
                 top.setFont(0, font)
-                top.setForeground(0, QtGui.QBrush(QtGui.QColor("#7ED491")))
-                top.setForeground(1, QtGui.QBrush(QtGui.QColor("#8C98A8")))
+                top.setForeground(0, QtGui.QBrush(QtGui.QColor("#C8D1DC")))
+                top.setForeground(
+                    1,
+                    QtGui.QBrush(
+                        QtGui.QColor("#4AB866" if node.get("show_viewport", True) else "#6E7681")
+                    ),
+                )
                 top.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
                 self.tree_inputs.addTopLevelItem(top)
 
@@ -1402,6 +1501,9 @@ def teardown_channel_box_extensions() -> None:
     _selected_input_target = None
     if _channel_box_ext_instance is not None:
         try:
+            if getattr(_channel_box_ext_instance, "obj_header_bar", None) is not None:
+                _channel_box_ext_instance.obj_header_bar.hide()
+                _channel_box_ext_instance.obj_header_bar.deleteLater()
             _channel_box_ext_instance.root.hide()
             _channel_box_ext_instance.root.deleteLater()
         except Exception:

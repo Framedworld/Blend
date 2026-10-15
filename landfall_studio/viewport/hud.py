@@ -243,7 +243,57 @@ def _draw_maya_hud_callback():
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     gpu.state.blend_set("ALPHA")
 
-    # 1. Top-Left Maya Poly Count HUD block
+    font_id = 0
+
+    # 0. Figma Make Top 26px Viewport Panel Menu Strip ("Panels  View  Shading  Lighting  Show  Renderer  Panels")
+    strip_h = 26.0
+    strip_y = rh - strip_h
+    _draw_rect_2d(shader, 0.0, strip_y, rw, strip_h, (0.125, 0.14, 0.16, 0.94))
+    _draw_rect_2d(shader, 0.0, strip_y, rw, 1.0, (0.07, 0.08, 0.09, 0.95))
+
+    blf.size(font_id, 10.5)
+    menu_x = 12.0
+    for m_txt in ("Panels", "View", "Shading", "Lighting", "Show", "Renderer"):
+        blf.color(font_id, 0.61, 0.65, 0.70, 0.95)
+        blf.position(font_id, menu_x, strip_y + 8.0, 0)
+        blf.draw(font_id, m_txt)
+        mw, _ = blf.dimensions(font_id, m_txt)
+        menu_x += mw + 14.0
+
+    # Divider + Viewport Quick Toggles (Wireframe on Shaded | Textured | Use All Lights | Viewport 2.0)
+    _draw_rect_2d(shader, menu_x - 4.0, strip_y + 5.0, 1.0, 16.0, (0.20, 0.23, 0.27, 0.95))
+    menu_x += 6.0
+
+    for b_txt, b_active in (
+        ("Wire on Shaded", True),
+        ("Textured [6]", True),
+        ("All Lights [7]", False),
+        ("X-Ray", False),
+        ("Isolate", False),
+    ):
+        bw, _ = blf.dimensions(font_id, b_txt)
+        pill_w = bw + 12.0
+        if menu_x + pill_w < rw - 150.0:
+            if b_active:
+                _draw_rect_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, (0.14, 0.24, 0.33, 0.92))
+                _draw_border_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, 1.0, (0.22, 0.64, 0.85, 0.88))
+                blf.color(font_id, 0.56, 0.84, 0.98, 1.0)
+            else:
+                _draw_rect_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, (0.10, 0.11, 0.13, 0.78))
+                blf.color(font_id, 0.58, 0.63, 0.69, 0.90)
+            blf.position(font_id, menu_x + 6.0, strip_y + 8.0, 0)
+            blf.draw(font_id, b_txt)
+            menu_x += pill_w + 5.0
+
+    # Right-side Renderer badge ("Viewport 2.0 (DirectX 11 / OpenGL)")
+    vp_badge = "Viewport 2.0  •  sRGB gamma"
+    vpw, _ = blf.dimensions(font_id, vp_badge)
+    if rw > 420.0:
+        blf.color(font_id, 0.49, 0.54, 0.60, 0.92)
+        blf.position(font_id, rw - vpw - 12.0, strip_y + 8.0, 0)
+        blf.draw(font_id, vp_badge)
+
+    # 1. Top-Left Figma Make Maya POLY COUNT HUD Card
     tools_w = 0.0
     try:
         area = getattr(context, "area", None)
@@ -254,59 +304,80 @@ def _draw_maya_hud_callback():
     except Exception:
         pass
     pad_x = tools_w + 18.0
-    top_y = rh - 50.0
-    box_w = 178.0
-    box_h = 92.0
-    _draw_rect_2d(shader, pad_x - 6, top_y - box_h + 14, box_w, box_h, (0.08, 0.09, 0.11, 0.68))
-    _draw_rect_2d(shader, pad_x - 6, top_y - box_h + 14, 2.5, box_h, (0.22, 0.64, 0.85, 0.92))
+    card_top_y = strip_y - 12.0
+    box_w = 194.0
+    box_h = 122.0
+    card_bottom_y = card_top_y - box_h
 
-    font_id = 0
-    blf.size(font_id, 11)
+    # Translucent dark-glass card (#15191DD8) + 1px border (#FFFFFF1A) + left accent bar
+    _draw_rect_2d(shader, pad_x - 6.0, card_bottom_y, box_w, box_h, (0.082, 0.098, 0.114, 0.85))
+    _draw_border_2d(shader, pad_x - 6.0, card_bottom_y, box_w, box_h, 1.0, (0.24, 0.28, 0.33, 0.72))
+    _draw_rect_2d(shader, pad_x - 6.0, card_bottom_y, 2.5, box_h, (0.22, 0.64, 0.85, 0.95))
 
+    # Card title: "POLY COUNT" (#7CC2E3) + column headers ("SCENE" | "SEL")
+    blf.size(font_id, 9.5)
+    blf.color(font_id, 0.486, 0.761, 0.890, 0.98)
+    blf.position(font_id, pad_x + 4.0, card_top_y - 15.0, 0)
+    blf.draw(font_id, "POLY COUNT")
+
+    blf.size(font_id, 8.5)
+    blf.color(font_id, 0.49, 0.53, 0.58, 0.90)
+    blf.position(font_id, pad_x + 76.0, card_top_y - 15.0, 0)
+    blf.draw(font_id, "SCENE")
+    blf.position(font_id, pad_x + 134.0, card_top_y - 15.0, 0)
+    blf.draw(font_id, "SEL")
+
+    _draw_rect_2d(shader, pad_x, card_top_y - 20.0, box_w - 14.0, 1.0, (0.20, 0.23, 0.27, 0.75))
+
+    blf.size(font_id, 10.5)
     rows = (
-        ("Verts:", stats["verts_total"], stats["verts_sel"]),
-        ("Edges:", stats["edges_total"], stats["edges_sel"]),
-        ("Faces:", stats["faces_total"], stats["faces_sel"]),
-        ("Tris:", stats["tris_total"], stats["tris_sel"]),
-        ("UVs:", stats["uvs_total"], stats["uvs_sel"]),
+        ("Verts", stats["verts_total"], stats["verts_sel"]),
+        ("Edges", stats["edges_total"], stats["edges_sel"]),
+        ("Faces", stats["faces_total"], stats["faces_sel"]),
+        ("Tris", stats["tris_total"], stats["tris_sel"]),
+        ("UVs", stats["uvs_total"], stats["uvs_sel"]),
     )
     for idx, (label, tot_val, sel_val) in enumerate(rows):
-        ry = top_y - idx * 15.5
-        blf.color(font_id, 0.45, 0.84, 0.56, 0.95)
-        blf.position(font_id, pad_x + 2, ry, 0)
+        ry = card_top_y - 34.0 - idx * 14.5
+        blf.color(font_id, 0.55, 0.60, 0.66, 0.95)
+        blf.position(font_id, pad_x + 4.0, ry, 0)
         blf.draw(font_id, label)
-        blf.color(font_id, 0.88, 0.91, 0.95, 0.95)
-        blf.position(font_id, pad_x + 62, ry, 0)
-        blf.draw(font_id, str(tot_val))
-        blf.color(font_id, 0.34, 0.76, 0.96, 0.98)
-        blf.position(font_id, pad_x + 118, ry, 0)
-        blf.draw(font_id, str(sel_val))
+        blf.color(font_id, 0.82, 0.86, 0.91, 0.96)
+        blf.position(font_id, pad_x + 76.0, ry, 0)
+        blf.draw(font_id, f"{int(tot_val):,}")
+        blf.color(font_id, 0.41, 0.72, 0.86, 0.98)
+        blf.position(font_id, pad_x + 134.0, ry, 0)
+        blf.draw(font_id, f"{int(sel_val):,}")
 
-    # 2. Top-Center Active Mode & Manipulator Pill + Make Live Badge
-    badge_text = f"{stats['mode_label']}   |   {stats['tool_label']}"
+    # Amber "Selected:" footer line inside Poly Count card
+    _draw_rect_2d(shader, pad_x, card_bottom_y + 18.0, box_w - 14.0, 1.0, (0.20, 0.23, 0.27, 0.75))
+    active_obj = getattr(getattr(context, "view_layer", None), "objects", None)
+    active_name = active_obj.active.name if (active_obj and active_obj.active) else "None"
+    blf.size(font_id, 9.5)
+    blf.color(font_id, 0.90, 0.66, 0.29, 0.98)
+    blf.position(font_id, pad_x + 4.0, card_bottom_y + 5.0, 0)
+    blf.draw(font_id, f"Selected:  {active_name}")
+
+    # 2. Top-Center Figma Make Live Surface / Active Mode Capsule
+    live_active = bool(stats.get("live_surface_active"))
+    live_name = str(stats.get("live_surface_name") or "")
+    mode_upper = str(stats["mode_label"]).upper()
+    if live_active and live_name:
+        capsule_txt = f"●  LIVE SURFACE: {live_name}   •   {mode_upper}"
+    else:
+        capsule_txt = f"●  LIVE SURFACE   •   {mode_upper}   •   {stats['tool_label']}"
     if stats.get("quad_draw_active"):
-        badge_text += "   |   Quad Draw"
-    blf.size(font_id, 11)
-    tw, th = blf.dimensions(font_id, badge_text)
-    bx = (rw - tw) * 0.5 - 12.0
-    by = rh - 38.0
-    _draw_rect_2d(shader, bx, by - 5.0, tw + 24.0, 20.0, (0.09, 0.11, 0.13, 0.78))
-    _draw_rect_2d(shader, bx, by + 13.5, tw + 24.0, 1.5, (0.22, 0.64, 0.85, 0.90))
-    blf.color(font_id, 0.86, 0.90, 0.95, 0.95)
-    blf.position(font_id, bx + 12.0, by, 0)
-    blf.draw(font_id, badge_text)
+        capsule_txt += "   •   QUAD DRAW"
 
-    if stats.get("live_surface_active") and stats.get("live_surface_name"):
-        live_txt = f"LIVE SURFACE: {stats['live_surface_name']}"
-        blf.size(font_id, 10.5)
-        lw, _ = blf.dimensions(font_id, live_txt)
-        lx = (rw - lw) * 0.5 - 10.0
-        ly = by - 24.0
-        _draw_rect_2d(shader, lx, ly - 4.0, lw + 20.0, 18.0, (0.06, 0.22, 0.15, 0.86))
-        _draw_border_2d(shader, lx, ly - 4.0, lw + 20.0, 18.0, 1.0, (0.22, 0.85, 0.52, 0.92))
-        blf.color(font_id, 0.36, 0.95, 0.62, 1.0)
-        blf.position(font_id, lx + 10.0, ly, 0)
-        blf.draw(font_id, live_txt)
+    blf.size(font_id, 10.5)
+    tw, _ = blf.dimensions(font_id, capsule_txt)
+    bx = (rw - tw) * 0.5 - 14.0
+    by = strip_y - 30.0
+    _draw_rect_2d(shader, bx, by - 5.0, tw + 28.0, 22.0, (0.075, 0.145, 0.125, 0.90))
+    _draw_border_2d(shader, bx, by - 5.0, tw + 28.0, 22.0, 1.0, (0.24, 0.65, 0.44, 0.85))
+    blf.color(font_id, 0.49, 0.89, 0.66, 1.0)
+    blf.position(font_id, bx + 14.0, by + 1.0, 0)
+    blf.draw(font_id, capsule_txt)
 
     # 3. Quad Draw Plotted Construction Dots in 3D Viewport
     try:
@@ -322,7 +393,6 @@ def _draw_maya_hud_callback():
                 co2d = location_3d_to_region_2d(region, r3d, pt3)
                 if co2d is not None:
                     dx, dy = float(co2d[0]), float(co2d[1])
-                    # Outer dark halo + inner glowing cyan/emerald dot
                     _draw_rect_2d(shader, dx - 5.5, dy - 5.5, 11.0, 11.0, (0.04, 0.11, 0.15, 0.94))
                     _draw_rect_2d(shader, dx - 3.8, dy - 3.8, 7.6, 7.6, (0.18, 0.92, 0.72, 0.98))
                     blf.size(font_id, 9.5)
@@ -332,109 +402,145 @@ def _draw_maya_hud_callback():
     except Exception:
         pass
 
-    # 4. Maya In-Viewport Heads-Up Caddy (polyExtrudeFace1 / polyBevel1 / polyBridgeEdge1 / polyConnectComponents1)
+    # 4. Figma Make In-Viewport Floating Dark-Glass Caddy (polyBevel1 / polyExtrudeFace1 / polyBridgeEdge1 / polyConnectComponents1)
     try:
         from .. import modeling
 
         caddy = modeling.get_active_caddy_state()
         if caddy.get("open"):
             rows_list = caddy.get("rows", [])
-            node_title = str(caddy.get("node_title") or caddy.get("tool") or "polyCaddy1")
+            node_title = str(caddy.get("node_title") or caddy.get("tool") or "polyBevel1")
 
-            cw_box = 242.0
-            row_h = 22.0
-            header_h = 24.0
-            footer_h = 18.0
-            ch_box = header_h + len(rows_list) * row_h + footer_h + 8.0
+            cw_box = 274.0
+            row_h = 24.0
+            header_h = 26.0
+            footer_h = 28.0
+            ch_box = header_h + len(rows_list) * row_h + footer_h + 10.0
 
-            # Position in lower-right quadrant of viewport (just like Maya's floating In-View Editor caddy)
-            cx_box = min(max(pad_x + 40.0, rw * 0.56), rw - cw_box - 22.0)
-            cy_box = max(48.0, rh * 0.22)
+            cx_box = min(max(pad_x + 40.0, rw * 0.53), rw - cw_box - 22.0)
+            cy_box = max(52.0, rh * 0.20)
 
-            # Drop shadow & main card body
-            _draw_rect_2d(shader, cx_box + 3.0, cy_box - 3.0, cw_box, ch_box, (0.02, 0.03, 0.04, 0.58))
-            _draw_rect_2d(shader, cx_box, cy_box, cw_box, ch_box, (0.10, 0.115, 0.135, 0.94))
-            _draw_border_2d(shader, cx_box, cy_box, cw_box, ch_box, 1.0, (0.28, 0.58, 0.82, 0.88))
+            # Drop shadow & dark-glass card body (#25282DF0) + 1px border (#444A54)
+            _draw_rect_2d(shader, cx_box + 4.0, cy_box - 4.0, cw_box, ch_box, (0.02, 0.03, 0.04, 0.65))
+            _draw_rect_2d(shader, cx_box, cy_box, cw_box, ch_box, (0.145, 0.157, 0.176, 0.95))
+            _draw_border_2d(shader, cx_box, cy_box, cw_box, ch_box, 1.0, (0.267, 0.290, 0.329, 0.95))
 
-            # Top header bar
+            # Top header bar (#343941 -> #2B2F36) + 2px top accent bar (#38A3D8)
             hy = cy_box + ch_box - header_h
-            _draw_rect_2d(shader, cx_box, hy, cw_box, header_h, (0.15, 0.24, 0.34, 0.96))
-            _draw_rect_2d(shader, cx_box, hy + header_h - 2.0, cw_box, 2.0, (0.26, 0.68, 0.94, 1.0))
+            _draw_rect_2d(shader, cx_box, hy, cw_box, header_h, (0.19, 0.21, 0.245, 0.98))
+            _draw_rect_2d(shader, cx_box, hy + header_h - 2.0, cw_box, 2.0, (0.22, 0.64, 0.85, 1.0))
 
+            # Glowing cyan status dot + node_title ("polyBevel1")
+            _draw_rect_2d(shader, cx_box + 10.0, hy + 9.0, 6.0, 6.0, (0.22, 0.64, 0.85, 1.0))
             blf.size(font_id, 11)
-            blf.color(font_id, 0.92, 0.96, 1.0, 1.0)
-            blf.position(font_id, cx_box + 10.0, hy + 6.0, 0)
+            blf.color(font_id, 0.95, 0.97, 1.0, 1.0)
+            blf.position(font_id, cx_box + 22.0, hy + 7.0, 0)
             blf.draw(font_id, node_title)
 
-            obj_tag = str(caddy.get("object_name") or "")
-            if obj_tag:
-                blf.size(font_id, 9.5)
-                otw, _ = blf.dimensions(font_id, obj_tag)
-                blf.color(font_id, 0.56, 0.78, 0.94, 0.92)
-                blf.position(font_id, cx_box + cw_box - otw - 8.0, hy + 6.5, 0)
-                blf.draw(font_id, obj_tag)
+            # Right-side header subtitle ("MMB Virtual Slider")
+            sub_hdr = "MMB Scrub"
+            blf.size(font_id, 9.0)
+            shw, _ = blf.dimensions(font_id, sub_hdr)
+            blf.color(font_id, 0.49, 0.54, 0.60, 0.95)
+            blf.position(font_id, cx_box + cw_box - shw - 10.0, hy + 8.0, 0)
+            blf.draw(font_id, sub_hdr)
 
-            # Parameter rows with visual scrub bar
+            # Parameter rows: Label + Horizontal Scrub Track (#16181B) + Cyan Thumb (#69B8DC) + Numeric Box (#15171A)
             for p_idx, rspec in enumerate(rows_list):
                 py = hy - (p_idx + 1) * row_h - 2.0
                 plabel = str(rspec.get("label", rspec.get("key", "")))
+                if len(plabel) > 16:
+                    plabel = plabel[:16]
                 ptype = str(rspec.get("type", "float"))
                 pval = rspec.get("value", 0.0)
                 fill_ratio = max(0.0, min(1.0, float(rspec.get("ratio", 0.0))))
                 is_active = bool(rspec.get("active", p_idx == 0))
 
                 if is_active:
-                    _draw_rect_2d(shader, cx_box + 4.0, py, cw_box - 8.0, row_h - 2.0, (0.18, 0.32, 0.46, 0.65))
-                    _draw_rect_2d(shader, cx_box + 4.0, py, 2.5, row_h - 2.0, (0.32, 0.78, 0.98, 1.0))
-                else:
-                    _draw_rect_2d(shader, cx_box + 4.0, py, cw_box - 8.0, row_h - 2.0, (0.08, 0.09, 0.11, 0.55))
+                    _draw_rect_2d(shader, cx_box + 4.0, py, cw_box - 8.0, row_h - 2.0, (0.18, 0.27, 0.36, 0.55))
+                    _draw_rect_2d(shader, cx_box + 4.0, py, 2.5, row_h - 2.0, (0.22, 0.64, 0.85, 1.0))
 
-                # Value fill bar on right half
-                bar_x = cx_box + 122.0
-                bar_w = cw_box - 130.0
-                _draw_rect_2d(shader, bar_x, py + 2.0, bar_w, row_h - 6.0, (0.06, 0.07, 0.08, 0.85))
+                blf.size(font_id, 10.0)
+                blf.color(font_id, 0.86, 0.90, 0.95, 0.98 if is_active else 0.82)
+                blf.position(font_id, cx_box + 11.0, py + 6.0, 0)
+                blf.draw(font_id, plabel)
+
+                # Horizontal Scrub Slider Track
+                track_x = cx_box + 116.0
+                track_w = 88.0
+                track_y = py + 8.0
+                track_h = 5.0
+                _draw_rect_2d(shader, track_x, track_y, track_w, track_h, (0.086, 0.094, 0.106, 0.95))
                 if fill_ratio > 0.01:
                     _draw_rect_2d(
                         shader,
-                        bar_x,
-                        py + 2.0,
-                        bar_w * fill_ratio,
-                        row_h - 6.0,
-                        (0.22, 0.58, 0.84, 0.58) if is_active else (0.18, 0.44, 0.64, 0.42),
+                        track_x,
+                        track_y,
+                        track_w * fill_ratio,
+                        track_h,
+                        (0.22, 0.64, 0.85, 0.92),
                     )
+                # Slider thumb handle (#69B8DC)
+                thumb_x = track_x + track_w * fill_ratio - 3.0
+                _draw_rect_2d(shader, thumb_x, track_y - 2.5, 6.0, track_h + 5.0, (0.41, 0.72, 0.86, 1.0))
 
-                blf.size(font_id, 10.5)
-                blf.color(font_id, 0.86, 0.90, 0.95, 0.98 if is_active else 0.85)
-                blf.position(font_id, cx_box + 11.0, py + 5.0, 0)
-                blf.draw(font_id, plabel)
+                # Recessed Numeric Value Box (#15171A) on right
+                num_x = cx_box + cw_box - 60.0
+                num_w = 52.0
+                _draw_rect_2d(shader, num_x, py + 3.0, num_w, row_h - 7.0, (0.082, 0.090, 0.102, 0.96))
+                _draw_border_2d(
+                    shader,
+                    num_x,
+                    py + 3.0,
+                    num_w,
+                    row_h - 7.0,
+                    1.0,
+                    (0.22, 0.64, 0.85, 0.90) if is_active else (0.19, 0.21, 0.25, 0.85),
+                )
 
                 if ptype == "bool":
                     val_txt = "On" if pval else "Off"
                 elif ptype == "int":
                     val_txt = str(int(round(float(pval))))
                 else:
-                    val_txt = f"{float(pval):.3f}"
+                    val_txt = f"{float(pval):.2f}"
+                blf.size(font_id, 9.5)
                 vw, _ = blf.dimensions(font_id, val_txt)
-                blf.color(font_id, 0.42, 0.86, 1.0, 1.0) if is_active else blf.color(font_id, 0.82, 0.88, 0.94, 0.92)
-                blf.position(font_id, bar_x + bar_w - vw - 6.0, py + 5.0, 0)
+                blf.color(font_id, 0.41, 0.72, 0.86, 1.0) if is_active else blf.color(font_id, 0.82, 0.87, 0.92, 0.95)
+                blf.position(font_id, num_x + num_w - vw - 5.0, py + 6.0, 0)
                 blf.draw(font_id, val_txt)
 
-            # Footer hint
-            blf.size(font_id, 9.0)
-            blf.color(font_id, 0.55, 0.64, 0.72, 0.88)
-            blf.position(font_id, cx_box + 10.0, cy_box + 5.0, 0)
-            blf.draw(font_id, "MMB Scrub  |  Up/Down Row  |  Enter Commit")
+            # Bottom Figma Make Caddy Action Pill Buttons ("Auto Fit: ON" | "Chamfer: ON" | "Mitering: Auto")
+            btn_y = cy_box + 6.0
+            btn_x = cx_box + 8.0
+            for pill_lbl, pill_on in (("Auto Fit: ON", False), ("Chamfer: ON", True), ("Mitering: Auto", False)):
+                blf.size(font_id, 8.5)
+                pw, _ = blf.dimensions(font_id, pill_lbl)
+                pbox_w = pw + 12.0
+                if pill_on:
+                    _draw_rect_2d(shader, btn_x, btn_y, pbox_w, 17.0, (0.12, 0.24, 0.33, 0.95))
+                    _draw_border_2d(shader, btn_x, btn_y, pbox_w, 17.0, 1.0, (0.22, 0.64, 0.85, 0.90))
+                    blf.color(font_id, 0.41, 0.72, 0.86, 1.0)
+                else:
+                    _draw_rect_2d(shader, btn_x, btn_y, pbox_w, 17.0, (0.11, 0.125, 0.145, 0.92))
+                    _draw_border_2d(shader, btn_x, btn_y, pbox_w, 17.0, 1.0, (0.21, 0.24, 0.28, 0.88))
+                    blf.color(font_id, 0.62, 0.67, 0.72, 0.92)
+                blf.position(font_id, btn_x + 6.0, btn_y + 4.5, 0)
+                blf.draw(font_id, pill_lbl)
+                btn_x += pbox_w + 5.0
     except Exception:
         pass
 
-    # 5. Bottom-Center Maya Camera Label ('persp')
-    cam_txt = str(stats["camera_label"])
-    blf.size(font_id, 11)
+    # 5. Bottom-Center Figma Make Camera Pill ("persp  |  35mm")
+    cam_base = str(stats["camera_label"])
+    cam_txt = f"{cam_base}   |   35mm" if "mm" not in cam_base else cam_base
+    blf.size(font_id, 10.5)
     cw, _ = blf.dimensions(font_id, cam_txt)
     cx = (rw - cw) * 0.5
     cy = 14.0
-    _draw_rect_2d(shader, cx - 8.0, cy - 4.0, cw + 16.0, 17.0, (0.08, 0.09, 0.11, 0.55))
-    blf.color(font_id, 0.52, 0.84, 0.62, 0.92)
+    _draw_rect_2d(shader, cx - 12.0, cy - 5.0, cw + 24.0, 19.0, (0.082, 0.098, 0.114, 0.78))
+    _draw_border_2d(shader, cx - 12.0, cy - 5.0, cw + 24.0, 19.0, 1.0, (0.20, 0.23, 0.27, 0.75))
+    blf.color(font_id, 0.64, 0.70, 0.76, 0.95)
     blf.position(font_id, cx, cy, 0)
     blf.draw(font_id, cam_txt)
 

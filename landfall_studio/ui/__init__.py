@@ -6,6 +6,7 @@ from . import (
     attribute_editor,
     channel_box_ext,
     icons,
+    interchange_panel,
     modeling_toolkit,
     outliner,
     shape_editor,
@@ -13,6 +14,11 @@ from . import (
     style,
     time_slider,
     tool_settings,
+)
+from .interchange_panel import (
+    create_interchange_widget,
+    get_interchange_ui_snapshot,
+    refresh_interchange_widgets,
 )
 from .attribute_editor import (
     BLENDER_MAYA_CONCEPT_MAPPING,
@@ -132,6 +138,7 @@ __all__ = [
     "clear_passthrough_history",
     "close_panel",
     "create_display_layer",
+    "create_interchange_widget",
     "create_maya_primitive",
     "cycle_right_dock",
     "delete_construction_history",
@@ -152,6 +159,7 @@ __all__ = [
     "get_command_feedback",
     "get_dag_outliner_snapshot",
     "get_hotkey_filter",
+    "get_interchange_ui_snapshot",
     "get_last_passthrough_event",
     "get_left_outliner_dock",
     "get_modeling_toolkit_snapshot",
@@ -166,6 +174,7 @@ __all__ = [
     "get_tool_settings_snapshot",
     "icons",
     "install_hotkey_filter",
+    "interchange_panel",
     "is_datablock_linked",
     "is_editable_text_widget",
     "is_filter_installed",
@@ -175,6 +184,7 @@ __all__ = [
     "open_panel",
     "open_tool_settings_for_shelf_item",
     "outliner",
+    "refresh_interchange_widgets",
     "refresh_modeling_toolkit_widgets",
     "refresh_shape_editor_widgets",
     "refresh_time_slider_widgets",
