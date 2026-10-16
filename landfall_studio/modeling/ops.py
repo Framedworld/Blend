@@ -234,37 +234,34 @@ if bpy is not None:
         bl_label = "Maya Quad Draw"
 
     class LANDFALL_STUDIO_OT_center_pivot_guarded(bpy.types.Operator):
-        """Maya `Modify > Center Pivot` (`CENTER` or `BOTTOM`) with animated transform guard."""
+        """Maya `Modify > Center Pivot` preserving world vertex positions and child transforms."""
 
         bl_idname = "landfall_studio.center_pivot_guarded"
         bl_label = "Center Pivot (Guarded)"
-        bl_description = "Center or bottom-align object pivot while guarding animated transforms"
+        bl_description = "Center the object pivot while preserving world-space geometry and child transforms"
         bl_options = {"REGISTER", "UNDO"}
 
         mode: bpy.props.StringProperty(name="Mode", default="CENTER")
-        allow_animated: bpy.props.BoolProperty(name="Allow Animated", default=False)
 
         def execute(self, context):
-            from ..adapters import btk_bridge
-            res = btk_bridge.center_pivot_guarded(mode=self.mode, allow_animated=bool(self.allow_animated))
+            res = diagnostics_uv.center_or_bake_pivot_guarded(mode=self.mode)
             if not res.get("ok"):
                 self.report({"WARNING"}, res.get("reason") or res.get("error", "Center Pivot blocked."))
                 return {"CANCELLED"}
             return {"FINISHED"}
 
     class LANDFALL_STUDIO_OT_freeze_transformations_guarded(bpy.types.Operator):
-        """Maya `Modify > Freeze Transformations` with animated transform & negative-scale guard."""
+        """Maya `Modify > Freeze Transformations` with driven/skinned transform guard."""
 
         bl_idname = "landfall_studio.freeze_transformations_guarded"
         bl_label = "Freeze Transformations (Guarded)"
-        bl_description = "Freeze object location, rotation, and scale while guarding animated transforms and negative scale"
+        bl_description = "Freeze object location, rotation, and scale while guarding driven or skinned transforms"
         bl_options = {"REGISTER", "UNDO"}
 
-        allow_animated: bpy.props.BoolProperty(name="Allow Animated", default=False)
+        allow_animated: bpy.props.BoolProperty(name="Allow Driven / Skinned", default=False)
 
         def execute(self, context):
-            from ..adapters import btk_bridge
-            res = btk_bridge.freeze_transformations_guarded(allow_animated=bool(self.allow_animated))
+            res = diagnostics_uv.freeze_transformations_guarded(force_driven=bool(self.allow_animated))
             if not res.get("ok"):
                 self.report({"WARNING"}, res.get("reason") or res.get("error", "Freeze Transformations blocked."))
                 return {"CANCELLED"}

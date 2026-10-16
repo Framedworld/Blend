@@ -194,7 +194,82 @@ def load_upstream_landfall(
     return module
 
 
-_standalone_landfall_reused: bool = False
+_suspended_standalone_module: Optional[str] = None
+_addon_package_for_recheck: str = ""
+
+
+def _suspend_standalone_landfall(addon_package: str) -> Optional[str]:
+    """Suspend an enabled standalone Landfall add-on in memory only, so its classes, keymaps and timers
+    don't run twice. It stays enabled in Preferences, and `_resume_standalone_landfall` re-registers it."""
+    global _suspended_standalone_module
+    if _suspended_standalone_module is not None:
+        return _suspended_standalone_module
+    conflict = _detect_standalone_landfall_conflict(addon_package)
+    if not conflict["conflict"]:
+        return None
+    mod_name = str(conflict["standalone_module"] or "")
+    standalone = sys.modules.get(mod_name)
+    if standalone is None or not hasattr(standalone, "unregister"):
+        print(f"[landfall_studio] Standalone Landfall '{mod_name}' is active but could not be suspended.")
+        return None
+
+    prefs_obj = None
+    was_dirty = False
+    try:
+        import bpy
+
+        prefs_obj = getattr(bpy.context, "preferences", None)
+        was_dirty = bool(getattr(prefs_obj, "is_dirty", False)) if prefs_obj is not None else False
+    except Exception:
+        pass
+    try:
+        standalone.unregister()
+        _suspended_standalone_module = mod_name
+        print(f"[landfall_studio] Suspended standalone Landfall '{mod_name}' for this session (still enabled in Preferences).")
+    except Exception as exc:
+        print(f"[landfall_studio] Could not suspend standalone Landfall '{mod_name}': {exc}")
+    finally:
+        if prefs_obj is not None:
+            try:
+                prefs_obj.is_dirty = was_dirty
+            except Exception:
+                pass
+    return _suspended_standalone_module
+
+
+def _resume_standalone_landfall() -> None:
+    """Re-register a standalone Landfall add-on suspended by Studio, if the user still has it enabled."""
+    global _suspended_standalone_module
+    mod_name = _suspended_standalone_module
+    _suspended_standalone_module = None
+    if not mod_name:
+        return
+    try:
+        import bpy
+
+        still_enabled = mod_name in getattr(bpy.context.preferences, "addons", {})
+        standalone = sys.modules.get(mod_name)
+        if still_enabled and standalone is not None and hasattr(standalone, "register"):
+            standalone.register()
+    except Exception as exc:
+        print(f"[landfall_studio] Could not resume standalone Landfall '{mod_name}': {exc}")
+
+
+def _deferred_standalone_recheck():
+    """If the standalone add-on registered after Studio at startup, suspend it and re-register Studio's
+    Landfall so Studio's classes (replaced by the standalone's identical bl_idnames) are live again."""
+    if not _registered or _landfall_module is None or _suspended_standalone_module is not None:
+        return None
+    if _suspend_standalone_landfall(_addon_package_for_recheck) is not None:
+        try:
+            _landfall_module.unregister()
+        except Exception:
+            pass
+        try:
+            _landfall_module.register()
+        except Exception as exc:
+            print(f"[landfall_studio] Re-registering Studio Landfall after standalone suspend failed: {exc}")
+    return None
 
 
 def _detect_standalone_landfall_conflict(addon_package: str) -> Dict[str, object]:
@@ -225,23 +300,11 @@ def register(
     prefs_draw_hook: Optional[Callable] = None,
 ) -> bool:
     """Register the upstream Landfall viewport, theme, overlays, and operators (guarded against standalone Landfall coexistence)."""
-    global _registered, _standalone_landfall_reused
+    global _registered, _addon_package_for_recheck
     if _registered:
         return True
 
-    conflict = _detect_standalone_landfall_conflict(addon_package)
-    if conflict["conflict"]:
-        standalone_mod = str(conflict["standalone_module"] or "landfall")
-        try:
-            import bpy
-
-            # Cleanly disable standalone Landfall before registering Studio's unified Landfall bridge
-            if standalone_mod in getattr(bpy.context.preferences, "addons", {}):
-                bpy.ops.preferences.addon_disable(module=standalone_mod)
-            elif standalone_mod in sys.modules and hasattr(sys.modules[standalone_mod], "unregister"):
-                sys.modules[standalone_mod].unregister()
-        except Exception:
-            _standalone_landfall_reused = True
+    _suspend_standalone_landfall(addon_package)
 
     module = load_upstream_landfall(
         addon_package=addon_package,
@@ -260,8 +323,7 @@ def register(
     except Exception:
         pass
 
-    if not _standalone_landfall_reused:
-        module.register()
+    module.register()
 
     if prefs_obj is not None:
         try:
@@ -270,6 +332,15 @@ def register(
             pass
 
     _registered = True
+    _addon_package_for_recheck = addon_package
+    try:
+        import bpy
+
+        # The standalone add-on may register after Studio at startup; re-check once everything is loaded
+        if not bpy.app.timers.is_registered(_deferred_standalone_recheck):
+            bpy.app.timers.register(_deferred_standalone_recheck, first_interval=0.5)
+    except Exception:
+        pass
     return True
 
 
@@ -298,7 +369,7 @@ def sync_now() -> None:
 
 def unregister() -> None:
     """Unregister upstream Landfall and guarantee zero leftover timers or draw handlers."""
-    global _registered, _standalone_landfall_reused
+    global _registered
     if not _registered or _landfall_module is None:
         return
     was_dirty = False
@@ -312,8 +383,12 @@ def unregister() -> None:
     except Exception:
         pass
     try:
-        if not _standalone_landfall_reused:
-            _landfall_module.unregister()
+        if bpy.app.timers.is_registered(_deferred_standalone_recheck):
+            bpy.app.timers.unregister(_deferred_standalone_recheck)
+    except Exception:
+        pass
+    try:
+        _landfall_module.unregister()
     finally:
         # Belt-and-suspenders timer & handler verification
         try:
@@ -328,4 +403,4 @@ def unregister() -> None:
         except Exception:
             pass
         _registered = False
-        _standalone_landfall_reused = False
+        _resume_standalone_landfall()

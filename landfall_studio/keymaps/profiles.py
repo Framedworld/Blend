@@ -310,11 +310,27 @@ def remove_studio_keymaps(context=None) -> None:
 
 
 def apply_profile(context=None, profile: str = "MAYA") -> Dict[str, Any]:
-    """Apply the `'MAYA'` or `'HYBRID'` interaction profile cleanly and reversibly."""
-    global _active_profile
+    """Apply the `'MAYA'` or `'HYBRID'` interaction profile cleanly and reversibly.
+
+    Restores the caller's `preferences.is_dirty` afterwards, so Studio's keymap mutes never
+    trigger auto-save on their own and the user's own pending preference edits are never dropped.
+    """
     if context is None:
         context = bpy.context
+    prefs = getattr(context, "preferences", None)
+    was_dirty = bool(getattr(prefs, "is_dirty", False)) if prefs is not None else False
+    try:
+        return _apply_profile_unguarded(context, profile)
+    finally:
+        if prefs is not None:
+            try:
+                prefs.is_dirty = was_dirty
+            except Exception:
+                pass
 
+
+def _apply_profile_unguarded(context, profile: str) -> Dict[str, Any]:
+    global _active_profile
     norm_profile = (profile or "MAYA").upper()
     if norm_profile not in ("MAYA", "HYBRID"):
         raise ValueError(f"Unsupported profile '{profile}'. Expected 'MAYA' or 'HYBRID'.")
@@ -754,13 +770,6 @@ def apply_profile(context=None, profile: str = "MAYA") -> Dict[str, Any]:
         )
     _save_muted_signatures_to_disk()
     _wake_studio_user_items(context)
-
-    prefs = getattr(context, "preferences", None)
-    if prefs is not None:
-        try:
-            prefs.is_dirty = False
-        except Exception:
-            pass
 
     return {
         "profile": _active_profile,

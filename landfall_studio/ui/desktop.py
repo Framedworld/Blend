@@ -82,13 +82,18 @@ def _ensure_qt_events_flushed() -> None:
 
 
 _cached_ui_handler: Optional[Any] = None
+_cached_ui_handler_tcl_id: Optional[int] = None
 
 
 def ensure_ui_handler() -> Optional[Any]:
     """Return the single authoritative `BlenderUiHandler` sharing `TclBlender`'s `Switchboard`."""
-    global _cached_ui_handler
-    if _cached_ui_handler is not None:
+    global _cached_ui_handler, _cached_ui_handler_tcl_id
+    # Reuse the cached handler only while it is bound to the current Tentacle instance
+    tcl_now = tentacle_bridge.get_tcl_instance()
+    tcl_id = id(tcl_now) if tcl_now is not None else None
+    if _cached_ui_handler is not None and _cached_ui_handler_tcl_id == tcl_id:
         return _cached_ui_handler
+    _cached_ui_handler = None
 
     deps = check_dependencies()
     if not deps["full_stack_ready"]:
@@ -106,6 +111,7 @@ def ensure_ui_handler() -> Optional[Any]:
             _cached_ui_handler = BlenderUiHandler.instance(switchboard=tcl.sb)
         else:
             _cached_ui_handler = BlenderUiHandler.instance()
+        _cached_ui_handler_tcl_id = id(tcl) if tcl is not None else None
         return _cached_ui_handler
     except Exception:
         return None
@@ -1549,7 +1555,10 @@ def register() -> None:
 def unregister() -> None:
     """Cleanly tear down all docks, theme overrides, hotkey passthrough filter, ScriptJobManager subscriptions, and workspace hooks."""
     global _registered, _right_dock, _top_shelf_dock, _last_selection_value_sig, _channels_default_filter_applied
+    global _cached_ui_handler, _cached_ui_handler_tcl_id
 
+    _cached_ui_handler = None
+    _cached_ui_handler_tcl_id = None
     hotkey_passthrough.uninstall_hotkey_filter()
     hotkey_passthrough.clear_passthrough_history()
     _uninstall_btk_workspace_hook()
