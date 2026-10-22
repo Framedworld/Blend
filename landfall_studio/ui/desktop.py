@@ -51,6 +51,8 @@ _top_shelf_dock: Optional[shelf.TopShelfQtDock] = None
 _panel_registry: Dict[str, Dict[str, Any]] = {}
 _last_selection_value_sig: Optional[Tuple[Any, ...]] = None
 _channels_default_filter_applied: bool = False
+_scene_restore_timer = None
+_desktop_sizes = {}
 _orig_btk_set_current_workspace: Optional[Any] = None
 _syncing_workspace_hook: bool = False
 
@@ -270,7 +272,15 @@ def get_panel_widget_and_slots(panel_id: str) -> Tuple[Optional[Any], Optional[A
         return None, None
 
     try:
-        ui_widget = handler.get(norm_id)
+        # The shared Switchboard already owns/caches this live panel. UiHandler
+        # .get() reapplies the full theme on every lookup, even during a mode
+        # handoff with the panel reparented. Repeated restyling crashed Qt's
+        # style teardown. Initialize once; explicit theme actions still own
+        # subsequent style changes.
+        ui_widget = handler.sb.get_ui(norm_id.split('#',1)[0])
+        if ui_widget is not None and not ui_widget.property('landfallStyleInitialized'):
+            handler.apply_styles(ui_widget)
+            ui_widget.setProperty('landfallStyleInitialized',True)
     except Exception:
         ui_widget = None
     if ui_widget is None:
@@ -280,6 +290,8 @@ def get_panel_widget_and_slots(panel_id: str) -> Tuple[Optional[Any], Optional[A
     _ensure_panel_initialized(norm_id, ui_widget, slots)
 
     if norm_id == "channels":
+        from . import channel_history
+        channel_history.ensure(slots)
         global _channels_default_filter_applied
         if not _channels_default_filter_applied and slots is not None:
             _channels_default_filter_applied = True
@@ -613,6 +625,8 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
         "MAYA_INTERCHANGE",
         "ATTRIBUTE_EDITOR",
         "TOOL_SETTINGS",
+        "MODIFIER_STACK",
+        "ZBRUSH_STUDIO",
         "NATIVE_PROPERTIES",
         "HIDDEN",
     ):
@@ -639,6 +653,10 @@ def cycle_right_dock(target_mode: Any = "CYCLE") -> Dict[str, Any]:
     elif next_mode == "TOOL_SETTINGS":
         rdock.show_tool_settings()
         tool_settings.refresh_tool_settings_widget()
+    elif next_mode == "MODIFIER_STACK":
+        rdock.show_modifier_stack()
+    elif next_mode == "ZBRUSH_STUDIO":
+        rdock.show_zbrush_studio()
     elif next_mode == "NATIVE_PROPERTIES":
         rdock.show_native_properties(properties_context="OBJECT")
     else:
@@ -768,13 +786,14 @@ def set_bottom_node_graph_split(
     if valid_tracked is not None:
         try:
             valid_tracked.ui_type = ui_type
-            for sp in valid_tracked.spaces:
-                if hasattr(sp, "show_region_ui"):
-                    sp.show_region_ui = False
-                if hasattr(sp, "show_region_toolbar"):
-                    sp.show_region_toolbar = False
-                if gtype == "SHADER" and hasattr(sp, "shader_type"):
-                    sp.shader_type = "OBJECT"
+            with bpy.context.temp_override(window=window, screen=window.screen, area=valid_tracked):
+                for sp in valid_tracked.spaces:
+                    if hasattr(sp, "show_region_ui") and sp.show_region_ui:
+                        sp.show_region_ui = False
+                    if hasattr(sp, "show_region_toolbar") and sp.show_region_toolbar:
+                        sp.show_region_toolbar = False
+                    if gtype == "SHADER" and hasattr(sp, "shader_type"):
+                        sp.shader_type = "OBJECT"
             for r in valid_tracked.regions:
                 r.tag_redraw()
         except Exception:
@@ -796,6 +815,13 @@ def apply_workspace_layout(preset_name: str) -> Dict[str, Any]:
     from . import channel_box_ext, right_dock, shelf
 
     preset = (preset_name or "Modeling Standard").strip()
+    if preset == "Sculpt & Remesh Studio":
+        from .. import sculpt
+        sculpt.enter()
+        return {"ok": True, "workspace_layout": preset, "right_dock_mode": "ZBRUSH_STUDIO"}
+    from .. import sculpt
+    if sculpt.is_engaged():
+        sculpt.return_to_maya()
     _active_workspace_layout = preset
 
     rdock = _get_right_dock()
@@ -844,13 +870,11 @@ def apply_workspace_layout(preset_name: str) -> Dict[str, Any]:
         try:
             if target_shelf_idx < sh.tabs.count():
                 sh.tabs.setCurrentIndex(target_shelf_idx)
-            idx_cmb = sh.cmb_workspace.findText(preset)
-            if idx_cmb >= 0 and sh.cmb_workspace.currentIndex() != idx_cmb:
-                sh.cmb_workspace.blockSignals(True)
-                sh.cmb_workspace.setCurrentIndex(idx_cmb)
-                sh.cmb_workspace.blockSignals(False)
         except Exception:
             pass
+    from . import main_menu
+
+    main_menu.sync_workspace_selector(preset)
 
     visible_spine_tabs = [
         k for k, btn in host.edge_tabs.items() if not btn.isHidden()
@@ -1001,7 +1025,8 @@ def _compute_selection_value_sig() -> Tuple[Any, ...]:
                     for k in sorted(o.keys())
                     if not k.startswith("btk_")
                 )
-                mods = tuple((m.name, m.type) for m in getattr(o, "modifiers", ()))
+                inputs={n['node_name']:tuple((a['name'],repr(a['value'])) for a in n['attributes']) for n in channel_box_ext.get_object_inputs(o)}
+                mods = tuple((m.name,m.type,m.show_viewport,m.show_render,m.show_in_editmode,m.show_on_cage,m.show_expanded,inputs.get(m.name,())) for m in getattr(o, "modifiers", ()))
                 skeys = ()
                 if getattr(o, "type", None) == "MESH" and getattr(o.data, "shape_keys", None) is not None:
                     skeys = tuple(
@@ -1014,9 +1039,44 @@ def _compute_selection_value_sig() -> Tuple[Any, ...]:
                 )
                 parent_name = o.parent.name if o.parent is not None else ""
                 shape_name = o.data.name if o.data is not None else ""
-                parts.append((o.name, parent_name, shape_name, loc, rot, scl, lk, mods, skeys, vgroups, cprops))
+                materials=[]
+                for slot in o.material_slots:
+                    mat=slot.material
+                    if mat is None:continue
+                    values=[]
+                    if mat.use_nodes and mat.node_tree:
+                        for node in mat.node_tree.nodes:
+                            if node.type!='BSDF_PRINCIPLED':continue
+                            for name in ('Base Color','Metallic','Roughness','Coat Weight','Emission Color','Emission Strength'):
+                                socket=node.inputs.get(name)
+                                if socket is not None:
+                                    value=socket.default_value
+                                    values.append((node.name,name,round(float(value),5) if isinstance(value,(int,float)) else tuple(round(float(v),5) for v in value)))
+                    materials.append((mat.name,mat.use_nodes,tuple(values)))
+                topology=(len(o.data.vertices),len(o.data.edges),len(o.data.polygons),tuple(layer.name for layer in o.data.uv_layers)) if o.type=='MESH' else ()
+                parts.append((o.name, parent_name, shape_name, loc, rot, scl, lk, mods, skeys, vgroups, cprops,tuple(materials),topology))
             except Exception:
                 continue
+        # The material browser can display unassigned shaders. Selection-only
+        # fingerprints otherwise miss their edits and library additions/removals.
+        from . import hypershade_panel
+        browser_materials=[]
+        for browser in hypershade_panel._hypershade_widgets:
+            try:
+                name=browser._selected_mat_name
+                mat=bpy.data.materials.get(name)
+                values=[]
+                if mat is not None and mat.use_nodes and mat.node_tree:
+                    for node in mat.node_tree.nodes:
+                        if node.type=='BSDF_PRINCIPLED':
+                            for field in ('Base Color','Metallic','Roughness','Coat Weight','Emission Color','Emission Strength'):
+                                socket=node.inputs.get(field)
+                                if socket is not None:
+                                    value=socket.default_value
+                                    values.append((node.name,field,round(float(value),5) if isinstance(value,(int,float)) else tuple(round(float(v),5) for v in value)))
+                browser_materials.append((name,tuple(values)))
+            except (RuntimeError,ReferenceError):continue
+        parts.append(('MATERIAL_LIBRARY',tuple((mat.name,mat.users) for mat in bpy.data.materials),tuple(browser_materials)))
         return tuple(parts)
     except Exception:
         return ()
@@ -1049,16 +1109,26 @@ def _on_time_changed(*_args) -> None:
 def _on_live_scene_or_depsgraph_update(*_args) -> None:
     """Refresh Qt panels when selection or object values change (skipping heavy panel rebuilds during active playback)."""
     global _last_selection_value_sig
+    from ..modeling.live_surface import invalidate_live_surface_cache
+    invalidate_live_surface_cache(_args[-1] if _args else None)
     if _is_animation_playing():
         sync_channels_now()
         return
     sig = _compute_selection_value_sig()
     if sig == _last_selection_value_sig:
         return
+    previous = _last_selection_value_sig
     _last_selection_value_sig = sig
     from . import hypershade_panel, interchange_panel
 
     sync_channels_now()
+    attribute_editor.refresh_attribute_editor()
+    # Moving the same objects only changes channel numbers. Rebuilding every
+    # scene panel here needlessly disturbs Qt layouts during viewport drags.
+    def structure(value):
+        return (value[:2], tuple((p[:3], p[6:]) for p in value[2:])) if value else None
+    if previous and structure(previous) == structure(sig):
+        return
     channel_box_ext.refresh_channel_box_extensions()
     modeling_toolkit.refresh_modeling_toolkit_widgets()
     shape_editor.refresh_shape_editor_widgets()
@@ -1066,17 +1136,96 @@ def _on_live_scene_or_depsgraph_update(*_args) -> None:
     hypershade_panel.refresh_hypershade_widgets()
     time_slider.refresh_time_slider_widgets()
     shelf.refresh_top_shelf_status()
-    attribute_editor.refresh_attribute_editor()
     tool_settings.refresh_tool_settings_widget()
     outliner.refresh_outliner()
+    from . import modifier_stack
+
+    modifier_stack.refresh_modifier_stack_widgets()
 
 
 def _on_scene_or_undo_sync(*_args) -> None:
     """Re-synchronize Display Layers and all Maya panels after Undo, Redo, or SceneOpened."""
     global _last_selection_value_sig
     _last_selection_value_sig = None
+    from ..commands.scene_edits import cancel_all
+    cancel_all(restore=False)
+    extension=channel_box_ext._channel_box_ext_instance
+    if extension is not None:
+        extension._presentation_signature=None
     channel_box_ext.sync_all_display_layers_from_scene()
     _on_live_scene_or_depsgraph_update()
+
+
+def _on_scene_opened(*_args):
+    """Rebind the existing desktop owners after Blender replaces its screen."""
+    import bpy
+    from ..commands.scene_edits import cancel_all
+    cancel_all(restore=False)
+    global _scene_restore_timer,_last_selection_value_sig
+    _last_selection_value_sig=None
+    _desktop_sizes.clear()
+    if bpy.app.background:
+        return _on_scene_or_undo_sync()
+    if _scene_restore_timer is None:
+        def restore():
+            global _scene_restore_timer
+            if not _registered:
+                _scene_restore_timer=None;return None
+            try:restore_workspace_desktop(restore_script_output=False)
+            finally:_scene_restore_timer=None
+            from .. import sculpt
+            sculpt.sync_mode()
+            _on_scene_or_undo_sync()
+            return None
+        _scene_restore_timer=restore
+        bpy.app.timers.register(restore,first_interval=.4,persistent=True)
+    from .. import sculpt
+    sculpt.reset_after_file_load()
+    from ..commands.registry import clear_history
+    clear_history()
+    from ..modeling.caddy import _active_caddy
+    _active_caddy.update(open=False,snapshot=None,object_name='',params={},result_fingerprint=None)
+
+
+def sync_window_size(window):
+    """Keep inspector widths useful when Blender scales editor fractions.
+
+    Called by the existing menu dock tick; manual divider changes are remembered
+    while the window size is stable. Sculpt owns its separate shelf sizing.
+    """
+    from ..sculpt import layout,is_engaged
+    if _scene_restore_timer is not None or layout.active or is_engaged() or len(window.screen.areas)<3:return
+    if not all((_right_dock,_top_shelf_dock)):return
+    owners={'right':_right_dock,'left':outliner.get_left_outliner_dock(),'top':_top_shelf_dock,'bottom':time_slider.get_bottom_time_slider_dock()}
+    areas={name:owner._inner_dock.area for name,owner in owners.items()}
+    if not all(areas.values()):return
+    widget=_right_dock.host_widget
+    if widget is None:return
+    dpr=widget.devicePixelRatioF();extent=(window.width,window.height,dpr);key=window.as_pointer()
+    previous=_desktop_sizes.get(key)
+    if previous is not None and previous['extent']==extent:
+        # Do not remember intermediate fractions while our resize owner is
+        # still applying the preceding window-size change.
+        if any(pending[0]==key for pending in layout._pending):return
+        _desktop_sizes[key]={'extent':extent,'sizes':{name:(area.width/dpr,area.height/dpr) for name,area in areas.items()}}
+        return
+    if previous is None:
+        # The first observed frame can already be a restored/small window.
+        # Normalize it once instead of accepting unusably narrow fractions.
+        previous={'extent':extent,'sizes':{name:(area.width/dpr,area.height/dpr) for name,area in areas.items()}}
+        _desktop_sizes[key]=previous
+    sizes=previous['sizes'];previous['extent']=extent
+    logical_width=window.width/dpr
+    minimum_right=max(360,widget.minimumSizeHint().width()+16)
+    right=min(max(minimum_right,sizes['right'][0]),max(260,logical_width-180-240))
+    left=max(180,min(sizes['left'][0],logical_width-right-240))
+    # Window dimensions can update before Blender recomputes its area fractions.
+    # Apply on the existing next-tick queue even when an old area momentarily
+    # appears to match the new target; otherwise that target is lost on reflow.
+    layout._defer_size(window,areas['left'],round(left*dpr),None,'RIGHT')
+    layout._defer_size(window,areas['right'],round(right*dpr),None,'LEFT')
+    layout._defer_size(window,areas['top'],None,round(max(116,sizes['top'][1])*dpr),'BOTTOM')
+    layout._defer_size(window,areas['bottom'],None,round(max(94,sizes['bottom'][1])*dpr),'TOP')
 
 
 def ensure_selection_and_value_sync() -> bool:
@@ -1102,7 +1251,8 @@ def ensure_selection_and_value_sync() -> bool:
             owner=_DESKTOP_SYNC_OWNER,
             ephemeral=False,
         )
-        for ev in ("Undo", "Redo", "SceneOpened"):
+        mgr.subscribe('SceneOpened',_on_scene_opened,owner=_DESKTOP_SYNC_OWNER,ephemeral=False)
+        for ev in ("Undo", "Redo"):
             mgr.subscribe(
                 ev,
                 _on_scene_or_undo_sync,
@@ -1114,6 +1264,42 @@ def ensure_selection_and_value_sync() -> bool:
         return False
 
 
+def _sync_channel_rows(widget, slots) -> None:
+    """Keep Qt items/selection stable while only channel values are changing."""
+    tbl = widget.tbl000
+    objects = slots.controller.get_selected_nodes()
+    key = slots._filter_key()
+    rows, states = slots.controller.build_table_data(objects, key, slots._filter_invert)
+    descriptors = slots.controller.collect_channels(objects, key, slots._filter_invert) if objects else []
+    signature = (
+        tuple(o.as_pointer() for o in objects), repr(descriptors), repr(states),
+        key, slots._filter_invert, slots._filter_enabled, widget.txt000.text(),
+    )
+    values = {row[0]: str(row[slots.COL_VALUE]) for row in rows}
+    names = [tbl.item(r, slots.COL_NAME).text() if tbl.item(r, slots.COL_NAME) else ""
+             for r in range(tbl.rowCount())]
+    if signature != getattr(slots, "_lf_live_rows_signature", None) or any(n not in values for n in names):
+        # Selection, filters, locks, connections or channel definitions changed.
+        # Leave their full presentation to the existing blendertk controller.
+        enabled = tbl.updatesEnabled()
+        tbl.setUpdatesEnabled(False)
+        try:
+            slots._refresh_table(tbl)
+            slots._lf_live_rows_signature = signature
+        finally:
+            tbl.setUpdatesEnabled(enabled)
+        return
+    blocked = tbl.blockSignals(True)
+    try:
+        for row, name in enumerate(names):
+            item = tbl.item(row, slots.COL_VALUE)
+            value = values.get(name)
+            if item is not None and value is not None and item.text() != value:
+                item.setText(value)
+    finally:
+        tbl.blockSignals(blocked)
+
+
 def sync_channels_now() -> Dict[str, Any]:
     """Force an immediate refresh of the `Channels` Qt table + `SHAPES/INPUTS/Layers` from Blender's live selection."""
     global _last_selection_value_sig
@@ -1121,18 +1307,20 @@ def sync_channels_now() -> Dict[str, Any]:
     if widget is None or slots is None:
         return {"ok": False, "target": "", "filter": "", "rows": {}}
 
-    # Ensure Maya Channel Box extensions (SHAPES + INPUTS + Display Layers) are attached
-    channel_box_ext.ensure_channel_box_extensions(widget)
-
+    from .channel_history import sync_targets
+    sync_targets(slots)
     # Avoid interrupting an active MMB scrub or open cell editor
     if getattr(slots, "_scrub_state", None) is not None:
         return get_channels_snapshot()
 
     tbl = getattr(widget, "tbl000", None)
-    if tbl is not None and hotkey_passthrough.is_editable_text_widget(tbl):
-        return get_channels_snapshot()
+    if tbl is not None:
+        from qtpy import QtWidgets
+        if tbl.state()==QtWidgets.QAbstractItemView.EditingState or hotkey_passthrough.is_editable_text_widget(tbl):
+            return get_channels_snapshot()
 
     try:
+        channel_box_ext.ensure_channel_box_extensions(widget)
         if _right_dock is not None and _right_dock.is_qt_embedded:
             chk_fit = getattr(slots, "_chk_auto_fit", None)
             if chk_fit is not None and chk_fit.isChecked():
@@ -1140,7 +1328,7 @@ def sync_channels_now() -> Dict[str, Any]:
                 chk_fit.setChecked(False)
                 chk_fit.blockSignals(False)
         if tbl is not None:
-            slots._refresh_table(tbl)
+            _sync_channel_rows(widget, slots)
         channel_box_ext.refresh_channel_box_extensions()
         _last_selection_value_sig = _compute_selection_value_sig()
         _ensure_qt_events_flushed()
@@ -1402,6 +1590,76 @@ def _uninstall_btk_workspace_hook() -> None:
 # Workspace Desktop Restore (Idempotent, Zero Duplicate Areas)
 # --------------------------------------------------------------------------------------
 
+_statusbar_saved: Dict[int, bool] = {}
+
+
+def set_blender_statusbar_hidden(hidden: bool) -> Dict[str, Any]:
+    """Hide Blender's own status bar (the Studio command line + help line replace it), or restore it."""
+    import bpy
+
+    changed = 0
+    wm = bpy.context.window_manager
+    for win in (wm.windows if wm else ()):
+        scr = win.screen
+        if scr is None:
+            continue
+        key = scr.as_pointer()
+        try:
+            # The update callback re-inits areas and needs a window in context (timers have none)
+            with bpy.context.temp_override(window=win, screen=scr):
+                if hidden:
+                    _statusbar_saved.setdefault(key, bool(scr.show_statusbar))
+                    if scr.show_statusbar:
+                        scr.show_statusbar = False
+                        changed += 1
+                elif key in _statusbar_saved:
+                    scr.show_statusbar = _statusbar_saved.pop(key)
+                    changed += 1
+        except Exception:
+            pass
+    if not hidden:
+        _statusbar_saved.clear()
+    _sync_statusbar_save_handlers(hidden)
+    return {"ok": True, "hidden": hidden, "changed": changed}
+
+
+_statusbar_hidden_before_save: bool = False
+
+
+def _on_save_pre_show_statusbar(*_args) -> None:
+    """`show_statusbar` is stored per screen in the .blend: save files with Blender's status bar visible."""
+    global _statusbar_hidden_before_save
+    _statusbar_hidden_before_save = bool(_statusbar_saved)
+    if _statusbar_hidden_before_save:
+        import bpy
+
+        for win in bpy.context.window_manager.windows:
+            if win.screen is not None and win.screen.as_pointer() in _statusbar_saved:
+                with bpy.context.temp_override(window=win, screen=win.screen):
+                    win.screen.show_statusbar = _statusbar_saved[win.screen.as_pointer()]
+
+
+def _on_save_post_hide_statusbar(*_args) -> None:
+    if _statusbar_hidden_before_save:
+        import bpy
+
+        for win in bpy.context.window_manager.windows:
+            if win.screen is not None and win.screen.as_pointer() in _statusbar_saved:
+                with bpy.context.temp_override(window=win, screen=win.screen):
+                    win.screen.show_statusbar = False
+
+
+def _sync_statusbar_save_handlers(install: bool) -> None:
+    import bpy
+
+    pairs = ((bpy.app.handlers.save_pre, _on_save_pre_show_statusbar), (bpy.app.handlers.save_post, _on_save_post_hide_statusbar))
+    for handlers, fn in pairs:
+        if install and fn not in handlers:
+            handlers.append(fn)
+        elif not install and fn in handlers:
+            handlers.remove(fn)
+
+
 def restore_workspace_desktop(
     dock_channels: bool = True,
     restore_script_output: bool = False,
@@ -1409,6 +1667,8 @@ def restore_workspace_desktop(
     dock_outliner: bool = True,
     dock_time_slider_bar: bool = True,
     apply_theme: bool = True,
+    dock_menu_bar: bool = True,
+    hide_blender_statusbar: bool = True,
 ) -> Dict[str, Any]:
     """Idempotently restore the Modern Maya Studio desktop layout without creating duplicate Blender areas."""
     import bpy
@@ -1436,11 +1696,22 @@ def restore_workspace_desktop(
     if dock_time_slider_bar:
         dock_time_slider()
 
+    if dock_menu_bar:
+        from . import main_menu
+
+        main_menu.dock_main_menu()
+
+    if hide_blender_statusbar:
+        set_blender_statusbar_hidden(True)
+
     if restore_script_output:
         open_panel("script_output", docked=True)
 
     if apply_theme:
         style.apply_modern_maya_theme_to_blender(bpy.context)
+
+    from . import viewport_bar
+    viewport_bar.register()
 
     areas_after = len(win.screen.areas) if win and win.screen else 0
     return {
@@ -1556,6 +1827,13 @@ def unregister() -> None:
     """Cleanly tear down all docks, theme overrides, hotkey passthrough filter, ScriptJobManager subscriptions, and workspace hooks."""
     global _registered, _right_dock, _top_shelf_dock, _last_selection_value_sig, _channels_default_filter_applied
     global _cached_ui_handler, _cached_ui_handler_tcl_id
+    global _scene_restore_timer
+    import bpy
+    if _scene_restore_timer is not None and bpy.app.timers.is_registered(_scene_restore_timer):bpy.app.timers.unregister(_scene_restore_timer)
+    _scene_restore_timer=None
+
+    from . import viewport_bar
+    viewport_bar.unregister()
 
     _cached_ui_handler = None
     _cached_ui_handler_tcl_id = None
@@ -1567,6 +1845,19 @@ def unregister() -> None:
         from blendertk.core_utils.script_job_manager import ScriptJobManager
 
         ScriptJobManager.instance().unsubscribe_all(_DESKTOP_SYNC_OWNER)
+    except Exception:
+        pass
+
+    try:
+        from . import hybrid_window, main_menu, modifier_stack
+
+        hybrid_window.teardown_editor_windows()
+        main_menu.teardown_main_menu()
+        modifier_stack.teardown_modifier_stack_widgets()
+    except Exception:
+        pass
+    try:
+        set_blender_statusbar_hidden(False)
     except Exception:
         pass
 
@@ -1600,6 +1891,9 @@ def unregister() -> None:
         except Exception:
             pass
     _panel_registry.clear()
+
+    from . import channel_history
+    channel_history.teardown()
 
     try:
         style.restore_blender_theme()
@@ -1799,7 +2093,7 @@ if bpy is not None:
             commands.record_command(
                 cmd_id="landfall_studio.maya_poly_primitive",
                 kwargs=dict(kwargs),
-                callable_fn=lambda kw=dict(kwargs): channel_box_ext.create_maya_primitive(**kw),
+                callable_fn=channel_box_ext.create_maya_primitive,
                 label=f"Create Maya {ptype.title()}",
                 repeatable=True,
             )

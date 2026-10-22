@@ -1,5 +1,7 @@
 """Unified command dispatch, repeatable command history (`G`), and tool state tracking (`Q/W/E/R`, `Y`)."""
 
+from . import scene_edits
+
 from .registry import (
     clear_state,
     execute_command,

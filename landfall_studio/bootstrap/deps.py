@@ -74,6 +74,13 @@ def check_dependencies(
         custom_deps_dir=custom_deps_dir,
     )
 
+    # Studio's widgets and upstream Qt wrappers must share one binding. Import
+    # no Qt during preflight, and refuse an already-loaded incompatible API.
+    qtpy_module = sys.modules.get("qtpy")
+    if qtpy_module is not None and getattr(qtpy_module, "API_NAME", "PySide6") != "PySide6":
+        raise RuntimeError("Landfall Studio requires PySide6. Restart Blender with QT_API=pyside6.")
+    os.environ["QT_API"] = "pyside6"
+
     packages: Dict[str, Dict[str, object]] = {}
     missing_pip_specs: List[str] = []
 

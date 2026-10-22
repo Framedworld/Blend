@@ -309,6 +309,8 @@ def _draw_maya_hud_callback():
         return
 
     context = bpy.context
+    if context.mode == 'SCULPT':
+        return
     region = getattr(context, "region", None)
     space = getattr(context, "space_data", None)
     if region is None or space is None or getattr(space, "type", "") != "VIEW_3D":
@@ -325,71 +327,10 @@ def _draw_maya_hud_callback():
 
     font_id = 0
 
-    # 0. Figma Make Top 26px Viewport Panel Menu Strip ("Panels  View  Shading  Lighting  Show  Renderer  Help")
-    strip_h = 26.0
-    strip_y = rh - strip_h
-    _draw_rect_2d(shader, 0.0, strip_y, rw, strip_h, (0.125, 0.14, 0.16, 0.94))
-    _draw_rect_2d(shader, 0.0, strip_y, rw, 1.0, (0.07, 0.08, 0.09, 0.95))
-
-    blf.size(font_id, 10.5)
-    menu_x = 12.0
-    for m_txt in ("Panels", "View", "Shading", "Lighting", "Show", "Renderer", "Help"):
-        blf.color(font_id, 0.61, 0.65, 0.70, 0.95)
-        blf.position(font_id, menu_x, strip_y + 8.0, 0)
-        blf.draw(font_id, m_txt)
-        mw, _ = blf.dimensions(font_id, m_txt)
-        menu_x += mw + 14.0
-
-    # Divider + Viewport Quick Toggles (4/5/6/7 Shading + Wire on Shaded + X-Ray + Soft Select [B])
-    _draw_rect_2d(shader, menu_x - 4.0, strip_y + 5.0, 1.0, 16.0, (0.20, 0.23, 0.27, 0.95))
-    menu_x += 6.0
-
-    maya_sh = str(stats.get("maya_shading_mode", "6"))
-    wire_on = bool(stats.get("wire_on_shaded", True))
-    xray_on = bool(stats.get("xray", False))
-    ssao_on = bool(stats.get("eevee_ssao", True))
-    shadows_on = bool(stats.get("eevee_shadows", True))
-    soft_on = bool(stats.get("soft_select_enabled", False))
-    soft_rad = float(stats.get("soft_select_radius", 1.0))
-
-    # Right-side Renderer badge ("Viewport 2.0 (EEVEE)  •  sRGB gamma")
-    rnd_label = str(stats.get("renderer_label") or "Viewport 2.0 (EEVEE)")
-    vp_badge = f"{rnd_label}  •  sRGB gamma"
-    vpw, _ = blf.dimensions(font_id, vp_badge)
-
-    for b_txt, b_active, is_amber in (
-        ("Wire [4]", maya_sh == "4", False),
-        ("Shaded [5]", maya_sh == "5", False),
-        ("Textured [6]", maya_sh == "6", False),
-        ("All Lights [7]", maya_sh == "7", False),
-        ("Wire on Shaded", wire_on, False),
-        ("SSAO", ssao_on and maya_sh in ("5", "6", "7"), False),
-        ("Shadows", shadows_on and maya_sh in ("6", "7"), False),
-        ("X-Ray [Alt+Z]", xray_on, False),
-        (f"Soft Select [B]: {soft_rad:.2f}m" if soft_on else "Soft Select [B]", soft_on, True),
-    ):
-        bw, _ = blf.dimensions(font_id, b_txt)
-        pill_w = bw + 11.0
-        if menu_x + pill_w < rw - vpw - 26.0:
-            if b_active and is_amber:
-                _draw_rect_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, (0.28, 0.19, 0.08, 0.94))
-                _draw_border_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, 1.0, (0.94, 0.66, 0.22, 0.92))
-                blf.color(font_id, 0.99, 0.82, 0.44, 1.0)
-            elif b_active:
-                _draw_rect_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, (0.14, 0.24, 0.33, 0.92))
-                _draw_border_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, 1.0, (0.22, 0.64, 0.85, 0.88))
-                blf.color(font_id, 0.56, 0.84, 0.98, 1.0)
-            else:
-                _draw_rect_2d(shader, menu_x, strip_y + 4.0, pill_w, 18.0, (0.10, 0.11, 0.13, 0.78))
-                blf.color(font_id, 0.58, 0.63, 0.69, 0.90)
-            blf.position(font_id, menu_x + 5.5, strip_y + 8.0, 0)
-            blf.draw(font_id, b_txt)
-            menu_x += pill_w + 4.0
-
-    if rw > 420.0:
-        blf.color(font_id, 0.52, 0.74, 0.88, 0.96)
-        blf.position(font_id, rw - vpw - 12.0, strip_y + 8.0, 0)
-        blf.draw(font_id, vp_badge)
+    # Interactive viewport controls are real Qt widgets (ui.viewport_bar).
+    strip_y = rh - 30.0
+    soft_on = bool(stats.get('soft_select_enabled', False))
+    soft_rad = float(stats.get('soft_select_radius', 1.0))
 
     # 1. Top-Left Figma Make Maya POLY COUNT HUD Card
     tools_w = 0.0
@@ -546,134 +487,7 @@ def _draw_maya_hud_callback():
     except Exception:
         pass
 
-    # 4. Figma Make In-Viewport Floating Dark-Glass Caddy (polyBevel1 / polyExtrudeFace1 / polyBridgeEdge1 / polyConnectComponents1)
-    try:
-        from .. import modeling
-
-        caddy = modeling.get_active_caddy_state()
-        if caddy.get("open"):
-            rows_list = caddy.get("rows", [])
-            node_title = str(caddy.get("node_title") or caddy.get("tool") or "polyBevel1")
-
-            cw_box = 274.0
-            row_h = 24.0
-            header_h = 26.0
-            footer_h = 28.0
-            ch_box = header_h + len(rows_list) * row_h + footer_h + 10.0
-
-            cx_box = min(max(pad_x + 40.0, rw * 0.53), rw - cw_box - 22.0)
-            cy_box = max(52.0, rh * 0.20)
-
-            # Drop shadow & dark-glass card body (#25282DF0) + 1px border (#444A54)
-            _draw_rect_2d(shader, cx_box + 4.0, cy_box - 4.0, cw_box, ch_box, (0.02, 0.03, 0.04, 0.65))
-            _draw_rect_2d(shader, cx_box, cy_box, cw_box, ch_box, (0.145, 0.157, 0.176, 0.95))
-            _draw_border_2d(shader, cx_box, cy_box, cw_box, ch_box, 1.0, (0.267, 0.290, 0.329, 0.95))
-
-            # Top header bar (#343941 -> #2B2F36) + 2px top accent bar (#38A3D8)
-            hy = cy_box + ch_box - header_h
-            _draw_rect_2d(shader, cx_box, hy, cw_box, header_h, (0.19, 0.21, 0.245, 0.98))
-            _draw_rect_2d(shader, cx_box, hy + header_h - 2.0, cw_box, 2.0, (0.22, 0.64, 0.85, 1.0))
-
-            # Glowing cyan status dot + node_title ("polyBevel1")
-            _draw_rect_2d(shader, cx_box + 10.0, hy + 9.0, 6.0, 6.0, (0.22, 0.64, 0.85, 1.0))
-            blf.size(font_id, 11)
-            blf.color(font_id, 0.95, 0.97, 1.0, 1.0)
-            blf.position(font_id, cx_box + 22.0, hy + 7.0, 0)
-            blf.draw(font_id, node_title)
-
-            # Right-side header subtitle ("MMB Virtual Slider")
-            sub_hdr = "MMB Scrub"
-            blf.size(font_id, 9.0)
-            shw, _ = blf.dimensions(font_id, sub_hdr)
-            blf.color(font_id, 0.49, 0.54, 0.60, 0.95)
-            blf.position(font_id, cx_box + cw_box - shw - 10.0, hy + 8.0, 0)
-            blf.draw(font_id, sub_hdr)
-
-            # Parameter rows: Label + Horizontal Scrub Track (#16181B) + Cyan Thumb (#69B8DC) + Numeric Box (#15171A)
-            for p_idx, rspec in enumerate(rows_list):
-                py = hy - (p_idx + 1) * row_h - 2.0
-                plabel = str(rspec.get("label", rspec.get("key", "")))
-                if len(plabel) > 16:
-                    plabel = plabel[:16]
-                ptype = str(rspec.get("type", "float"))
-                pval = rspec.get("value", 0.0)
-                fill_ratio = max(0.0, min(1.0, float(rspec.get("ratio", 0.0))))
-                is_active = bool(rspec.get("active", p_idx == 0))
-
-                if is_active:
-                    _draw_rect_2d(shader, cx_box + 4.0, py, cw_box - 8.0, row_h - 2.0, (0.18, 0.27, 0.36, 0.55))
-                    _draw_rect_2d(shader, cx_box + 4.0, py, 2.5, row_h - 2.0, (0.22, 0.64, 0.85, 1.0))
-
-                blf.size(font_id, 10.0)
-                blf.color(font_id, 0.86, 0.90, 0.95, 0.98 if is_active else 0.82)
-                blf.position(font_id, cx_box + 11.0, py + 6.0, 0)
-                blf.draw(font_id, plabel)
-
-                # Horizontal Scrub Slider Track
-                track_x = cx_box + 116.0
-                track_w = 88.0
-                track_y = py + 8.0
-                track_h = 5.0
-                _draw_rect_2d(shader, track_x, track_y, track_w, track_h, (0.086, 0.094, 0.106, 0.95))
-                if fill_ratio > 0.01:
-                    _draw_rect_2d(
-                        shader,
-                        track_x,
-                        track_y,
-                        track_w * fill_ratio,
-                        track_h,
-                        (0.22, 0.64, 0.85, 0.92),
-                    )
-                # Slider thumb handle (#69B8DC)
-                thumb_x = track_x + track_w * fill_ratio - 3.0
-                _draw_rect_2d(shader, thumb_x, track_y - 2.5, 6.0, track_h + 5.0, (0.41, 0.72, 0.86, 1.0))
-
-                # Recessed Numeric Value Box (#15171A) on right
-                num_x = cx_box + cw_box - 60.0
-                num_w = 52.0
-                _draw_rect_2d(shader, num_x, py + 3.0, num_w, row_h - 7.0, (0.082, 0.090, 0.102, 0.96))
-                _draw_border_2d(
-                    shader,
-                    num_x,
-                    py + 3.0,
-                    num_w,
-                    row_h - 7.0,
-                    1.0,
-                    (0.22, 0.64, 0.85, 0.90) if is_active else (0.19, 0.21, 0.25, 0.85),
-                )
-
-                if ptype == "bool":
-                    val_txt = "On" if pval else "Off"
-                elif ptype == "int":
-                    val_txt = str(int(round(float(pval))))
-                else:
-                    val_txt = f"{float(pval):.2f}"
-                blf.size(font_id, 9.5)
-                vw, _ = blf.dimensions(font_id, val_txt)
-                blf.color(font_id, 0.41, 0.72, 0.86, 1.0) if is_active else blf.color(font_id, 0.82, 0.87, 0.92, 0.95)
-                blf.position(font_id, num_x + num_w - vw - 5.0, py + 6.0, 0)
-                blf.draw(font_id, val_txt)
-
-            # Bottom Figma Make Caddy Action Pill Buttons ("Auto Fit: ON" | "Chamfer: ON" | "Mitering: Auto")
-            btn_y = cy_box + 6.0
-            btn_x = cx_box + 8.0
-            for pill_lbl, pill_on in (("Auto Fit: ON", False), ("Chamfer: ON", True), ("Mitering: Auto", False)):
-                blf.size(font_id, 8.5)
-                pw, _ = blf.dimensions(font_id, pill_lbl)
-                pbox_w = pw + 12.0
-                if pill_on:
-                    _draw_rect_2d(shader, btn_x, btn_y, pbox_w, 17.0, (0.12, 0.24, 0.33, 0.95))
-                    _draw_border_2d(shader, btn_x, btn_y, pbox_w, 17.0, 1.0, (0.22, 0.64, 0.85, 0.90))
-                    blf.color(font_id, 0.41, 0.72, 0.86, 1.0)
-                else:
-                    _draw_rect_2d(shader, btn_x, btn_y, pbox_w, 17.0, (0.11, 0.125, 0.145, 0.92))
-                    _draw_border_2d(shader, btn_x, btn_y, pbox_w, 17.0, 1.0, (0.21, 0.24, 0.28, 0.88))
-                    blf.color(font_id, 0.62, 0.67, 0.72, 0.92)
-                blf.position(font_id, btn_x + 6.0, btn_y + 4.5, 0)
-                blf.draw(font_id, pill_lbl)
-                btn_x += pbox_w + 5.0
-    except Exception:
-        pass
+    # Modeling parameters and Apply/Cancel live in ui.caddy_panel.
 
     # 5. Bottom-Left Maya World Axis Tripod (X / Y / Z)
     ax_cx = pad_x + 16.0
@@ -704,7 +518,9 @@ def _draw_maya_hud_callback():
 
     # 6. Bottom-Center Figma Make Camera Pill ("persp  |  35mm")
     cam_base = str(stats["camera_label"])
-    cam_txt = f"{cam_base}   |   35mm" if "mm" not in cam_base else cam_base
+    camera = getattr(context.scene, "camera", None)
+    lens = camera.data.lens if camera and space.region_3d.view_perspective == "CAMERA" else space.lens
+    cam_txt = f"{cam_base}   |   {lens:g}mm" if "mm" not in cam_base else cam_base
     blf.size(font_id, 10.5)
     cw, _ = blf.dimensions(font_id, cam_txt)
     cx = (rw - cw) * 0.5

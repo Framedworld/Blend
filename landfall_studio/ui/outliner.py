@@ -32,6 +32,8 @@ from . import channel_box_ext, icons, style, tool_settings
 
 _ROLE_NODE_BADGE = 257
 _ROLE_NODE_LINKED = 258
+_ROLE_NODE_KEY = 259
+_ROLE_NODE_SELECTED = 260
 
 
 def _is_descendant_of(candidate_parent: Any, child_obj: Any) -> bool:
@@ -191,7 +193,7 @@ def get_dag_outliner_snapshot(
         return {"ok": False, "roots": [], "object_count": 0}
 
     flt = (filter_text or "").strip().lower()
-    all_objs = sorted(list(scene.objects), key=lambda o: o.name.lower())
+    all_objs = sorted((o for o in scene.objects if not o.get('_landfall_recovery')), key=lambda o: o.name.lower())
 
     children_map: Dict[str, List[Any]] = {}
     roots_objs: List[Any] = []
@@ -235,8 +237,7 @@ def select_in_outliner(object_names: List[str]) -> Dict[str, Any]:
         obj = bpy.data.objects.get(name)
         if obj is not None and obj.name in vl.objects:
             active_set = obj
-    if active_set is not None:
-        vl.objects.active = active_set
+    vl.objects.active = active_set
 
     desktop.sync_channels_now()
     channel_box_ext.refresh_channel_box_extensions()
@@ -309,7 +310,7 @@ def _create_dag_tree_widget(on_reparent_drop, on_selection_changed):
 
                 f = painter.font()
                 f.setFamily("Consolas")
-                f.setPixelSize(8)
+                f.setPixelSize(10)
                 f.setBold(True)
                 painter.setFont(f)
                 painter.setPen(QtGui.QColor(BADGE_COLORS.get(badge_str, "#7E8791")))
@@ -427,10 +428,12 @@ class MayaLeftSidebarWidget:
 
         tblay.addStretch(1)
 
-        # Bottom Miniature Layout Preset Icons (`32x24px`)
+        # Maya Quick Layout buttons (bottom of the Tool Box)
         for lay_icon, lay_tip, lay_cb in (
-            ("mask_obj", "Single Perspective View", lambda: self._on_quick_layout("PERSP")),
-            ("quad_view", "Four-View / Frame All (A)", lambda: self._on_quick_layout("FRAME_ALL")),
+            ("layout_single", "Single Perspective View", lambda: self._on_quick_layout("PERSP")),
+            ("layout_four", "Four View (toggle quad view)", lambda: self._on_quick_layout("FOUR_VIEW")),
+            ("layout_outliner", "Perspective / Outliner", lambda: self._on_quick_layout("OUTLINER")),
+            ("layout_graph", "Perspective / Graph Editor", lambda: self._on_quick_layout("GRAPH")),
         ):
             lbtn = QtWidgets.QToolButton()
             lbtn.setObjectName("MayaToolBoxBtn")
@@ -459,7 +462,7 @@ class MayaLeftSidebarWidget:
         lbl.setObjectName("MayaSectionTitle")
         self.chk_shapes = QtWidgets.QCheckBox("Shapes")
         self.chk_shapes.setChecked(True)
-        self.chk_shapes.setStyleSheet("font-size: 9px; color: #8D949D; background: transparent;")
+        self.chk_shapes.setStyleSheet("font-size: 10px; color: #8D949D; background: transparent;")
         self.chk_shapes.setToolTip("Display expandable [+] Shape & Modifier nodes under Transform nodes")
         self.chk_shapes.toggled.connect(lambda _: self.refresh())
         self.btn_unparent = QtWidgets.QPushButton("↑Root")
@@ -471,6 +474,26 @@ class MayaLeftSidebarWidget:
         hrow.addWidget(self.chk_shapes)
         hrow.addWidget(self.btn_unparent)
         olay.addWidget(hdr)
+
+        # Maya Outliner menus: Display / Show / Help
+        from . import menus
+
+        menubar = QtWidgets.QMenuBar()
+        menubar.setObjectName("MayaPanelMenuBar")
+        menubar.setNativeMenuBar(False)
+        m_display = menubar.addMenu("Display")
+        act_shapes = m_display.addAction("Shapes")
+        act_shapes.setCheckable(True)
+        act_shapes.setChecked(True)
+        act_shapes.toggled.connect(self.chk_shapes.setChecked)
+        menus.build_qmenu(m_display, [menus.SEP, menus.O("Frame Selected", "landfall.frame_selected", hint="F"), menus.O("Frame All", "landfall_studio.frame_all", hint="A")])
+        menus.build_qmenu(menubar.addMenu("Show"), [
+            menus.O("Hide Selection", "object.hide_view_set", hint="H"),
+            menus.O("Show All", "object.hide_view_clear", hint="Alt+H"),
+            menus.O("Isolate Selected", "view3d.localview", invoke=True, hint="/"),
+        ])
+        menus.build_qmenu(menubar.addMenu("Help"), [menus.O("Outliner (Blender Manual)", "wm.url_open", url="https://docs.blender.org/manual/en/latest/editors/outliner/index.html")])
+        olay.addWidget(menubar)
 
         # 2. Recessed Search Box (`#17191C`) with `⌘F` Keycap Badge
         search_wrap = QtWidgets.QFrame()
@@ -485,7 +508,7 @@ class MayaLeftSidebarWidget:
         lbl_kbd = QtWidgets.QLabel("⌘F")
         lbl_kbd.setStyleSheet(
             "background-color: #23272D; color: #68717C; border: 1px solid #353A42; "
-            "border-radius: 2px; font-size: 8px; padding: 1px 4px; font-family: Consolas, monospace;"
+            "border-radius: 2px; font-size: 10px; padding: 1px 4px; font-family: Consolas, monospace;"
         )
         srow.addWidget(self.txt_search, 1)
         srow.addWidget(lbl_kbd)
@@ -553,6 +576,11 @@ class MayaLeftSidebarWidget:
         class _ToolBoxBtn(QtWidgets.QToolButton):
             def mouseDoubleClickEvent(self, event):
                 from . import desktop
+                import bpy
+                if bpy.context.mode == 'SCULPT':
+                    desktop.cycle_right_dock('ZBRUSH_STUDIO')
+                    event.accept()
+                    return
 
                 tool_settings.set_tool_setting("tool_context", tool_id)
                 desktop.cycle_right_dock("TOOL_SETTINGS")
@@ -565,21 +593,24 @@ class MayaLeftSidebarWidget:
                 if self.isChecked():
                     # Figma Make `.rail-tool.active::before` left glowing Maya-teal bar
                     p.fillRect(0, 4, 2, self.height() - 8, QtGui.QColor("#38A3D8"))
-                if key_hint:
+                hint = getattr(self, 'key_hint', key_hint)
+                if hint:
                     f = p.font()
                     f.setFamily("Consolas")
-                    f.setPixelSize(7)
+                    f.setPixelSize(10)
                     f.setBold(True)
                     p.setFont(f)
                     p.setPen(QtGui.QColor("#8ECAE6" if self.isChecked() else "#68717A"))
                     p.drawText(
                         QtCore.QRectF(0, 0, self.width() - 3, self.height() - 2),
                         QtCore.Qt.AlignRight | QtCore.Qt.AlignBottom,
-                        key_hint,
+                        hint,
                     )
                 p.end()
 
         btn = _ToolBoxBtn()
+        btn.key_hint = key_hint
+        btn.maya_tooltip = tip
         btn.setObjectName("MayaToolBoxBtn")
         btn.setCheckable(True)
         btn.setIcon(icons.get_icon(icon_name, 18))
@@ -603,7 +634,7 @@ class MayaLeftSidebarWidget:
                 if key_hint:
                     f = p.font()
                     f.setFamily("Consolas")
-                    f.setPixelSize(7)
+                    f.setPixelSize(10)
                     f.setBold(True)
                     p.setFont(f)
                     p.setPen(QtGui.QColor("#FAD075" if self.isChecked() else "#68717A"))
@@ -626,19 +657,39 @@ class MayaLeftSidebarWidget:
 
     def _activate_tool(self, tool_id: str) -> None:
         import bpy
+        from . import menus
+        if bpy.context.mode == 'SCULPT':
+            from .zbrush_panel import command
+            tools = {'SELECT':'DRAW','LASSO':'SELECT_RECT','TRANSLATE':'MOVE','ROTATE':'ROTATE','RESIZE':'SCALE'}
+            command('TOOL',tool=tools[tool_id])
+            self._sync_toolbox_highlight()
+            return
 
         actual = "SELECT" if tool_id == "LASSO" else tool_id
         try:
-            bpy.ops.landfall_studio.select_tool(tool=actual)
+            with bpy.context.temp_override(**menus.view3d_override()):
+                bpy.ops.landfall_studio.select_tool(tool=actual)
+                if tool_id == "LASSO":
+                    bpy.ops.wm.tool_set_by_id(name="builtin.select_lasso")
         except Exception:
             cmd_registry.set_active_tool(actual)
         self._sync_toolbox_highlight()
 
     def _sync_toolbox_highlight(self) -> None:
         from .. import continuity
+        import bpy
 
         cur = cmd_registry.get_active_tool()
+        sculpt = bpy.context.mode == 'SCULPT'
+        if sculpt:
+            from ..sculpt import ops
+            with bpy.context.temp_override(**ops.view_context()):
+                t=bpy.context.workspace.tools.from_space_view3d_mode('SCULPT',create=False)
+                cur={'builtin.brush':'SELECT','builtin.move':'TRANSLATE','builtin.rotate':'ROTATE','builtin.scale':'RESIZE','builtin.box_hide':'LASSO'}.get(t.idname if t else '', '')
+                if t and t.idname.startswith('builtin_brush.'):cur='SELECT'
         for tid, btn in self.tool_btns.items():
+            btn.key_hint=({'SELECT':'Q','TRANSLATE':'W','ROTATE':'R','RESIZE':'E','LASSO':''} if sculpt else {'SELECT':'Q','TRANSLATE':'W','ROTATE':'E','RESIZE':'R','LASSO':''})[tid]
+            btn.setToolTip(('Sculpt '+{'SELECT':'Draw','TRANSLATE':'Move','ROTATE':'Rotate','RESIZE':'Scale','LASSO':'SelectRect'}[tid]+' '+btn.key_hint) if sculpt else btn.maya_tooltip)
             btn.blockSignals(True)
             btn.setChecked(tid == cur)
             btn.blockSignals(False)
@@ -652,7 +703,37 @@ class MayaLeftSidebarWidget:
 
     def _on_quick_layout(self, action: str) -> None:
         import bpy
+        if bpy.context.mode == 'SCULPT' and action in ('CENTER_PIVOT','SOFT_SELECT'):
+            from .zbrush_panel import command,show_brush_palette
+            if action == 'CENTER_PIVOT': command('HIGHER')
+            else: show_brush_palette()
+            return
 
+        if action in ("PERSP", "FOUR_VIEW"):
+            from . import menus
+
+            ov = menus.view3d_override()
+            space = ov.get("area").spaces.active if ov.get("area") is not None else None
+            quad_on = bool(space is not None and len(getattr(space, "region_quadviews", ())) > 0)
+            if (action == "FOUR_VIEW") != quad_on:
+                menus.run_op("screen.region_quadview")
+            if action == "PERSP" and space is not None and space.region_3d is not None:
+                space.region_3d.view_perspective = "PERSP"
+            return
+        if action == "OUTLINER":
+            from . import desktop
+
+            if not self.root.isVisible():
+                desktop.dock_left_outliner()
+            return
+        if action == "GRAPH":
+            try:
+                from blendertk.ui_utils._ui_utils import UiUtils
+
+                UiUtils.toggle_editor("Graph Editor", edge_size=260)
+            except Exception:
+                pass
+            return
         if action == "FRAME_ALL":
             try:
                 bpy.ops.landfall_studio.frame_all()
@@ -694,10 +775,6 @@ class MayaLeftSidebarWidget:
                     "color": palette[idx % len(palette)],
                 }
             )
-        if len(rows_data) == 1:
-            rows_data.append({"name": "geo_primary", "visible": True, "display_type": "V", "color": "#D779A8"})
-            rows_data.append({"name": "reference", "visible": True, "display_type": "R", "color": "#CBAC5F"})
-
         for r in rows_data:
             row_w = QtWidgets.QFrame()
             row_w.setFixedHeight(20)
@@ -705,8 +782,14 @@ class MayaLeftSidebarWidget:
             rlay.setContentsMargins(2, 1, 2, 1)
             rlay.setSpacing(6)
 
-            lbl_eye = QtWidgets.QLabel("👁" if r["visible"] else "—")
-            lbl_eye.setStyleSheet("color: #8D949D; font-size: 9px;")
+            lbl_eye = QtWidgets.QToolButton()
+            lbl_eye.setText("V" if r["visible"] else "—")
+            lbl_eye.setObjectName("mini_visibility_" + r["name"])
+            lbl_eye.setToolTip("Toggle layer visibility")
+            lbl_eye.setEnabled(r["name"] != "defaultLayer")
+            lbl_eye.clicked.connect(lambda _=False, n=r["name"], v=r["visible"]:
+                                    self._set_mini_layer(n, visible=not v))
+            lbl_eye.setStyleSheet("color: #8D949D; font-size: 10px;")
             lbl_eye.setFixedWidth(14)
 
             swatch = QtWidgets.QFrame()
@@ -714,15 +797,20 @@ class MayaLeftSidebarWidget:
             swatch.setStyleSheet(f"background-color: {r['color']}; border-radius: 1px;")
 
             lbl_name = QtWidgets.QLabel(r["name"])
-            lbl_name.setStyleSheet("color: #C9CDD3; font-size: 9.5px;")
+            lbl_name.setStyleSheet("color: #C9CDD3; font-size: 10px;")
 
             mode_char = "V" if r["display_type"] == "N" else r["display_type"]
-            lbl_mode = QtWidgets.QLabel(mode_char)
-            lbl_mode.setAlignment(QtCore.Qt.AlignCenter)
+            lbl_mode = QtWidgets.QToolButton()
+            lbl_mode.setText(mode_char)
+            lbl_mode.setObjectName("mini_mode_" + r["name"])
+            lbl_mode.setToolTip("Cycle Normal / Template / Reference")
+            lbl_mode.setEnabled(r["name"] != "defaultLayer")
+            lbl_mode.clicked.connect(lambda _=False, n=r["name"], m=r["display_type"]:
+                                     self._set_mini_layer(n, display_type={"N": "T", "T": "R", "R": "N"}.get(m, "N")))
             lbl_mode.setFixedSize(16, 15)
             lbl_mode.setStyleSheet(
                 "background-color: #191C20; color: #7E8791; border: 1px solid #30353C; "
-                "border-radius: 2px; font-family: Consolas, monospace; font-size: 8px; font-weight: bold;"
+                "border-radius: 2px; font-family: Consolas, monospace; font-size: 10px; font-weight: bold;"
             )
 
             rlay.addWidget(lbl_eye)
@@ -730,6 +818,11 @@ class MayaLeftSidebarWidget:
             rlay.addWidget(lbl_name, 1)
             rlay.addWidget(lbl_mode)
             self.layer_rows_lay.addWidget(row_w)
+
+    def _set_mini_layer(self, name, **values):
+        channel_box_ext.set_display_layer_state(name, **values)
+        channel_box_ext.refresh_channel_box_extensions()
+        self._refresh_display_layers_mini()
 
     def _on_unparent_clicked(self) -> None:
         import bpy
@@ -765,12 +858,16 @@ class MayaLeftSidebarWidget:
             obj_name = item.data(0, QtCore.Qt.UserRole)
             if obj_name and str(obj_name) not in names:
                 names.append(str(obj_name))
-        if names:
-            self._updating = True
-            try:
-                select_in_outliner(names)
-            finally:
-                self._updating = False
+        current = self.tree.currentItem()
+        active_name = str(current.data(0, QtCore.Qt.UserRole) or "") if current is not None else ""
+        if active_name in names:
+            names.remove(active_name)
+            names.append(active_name)
+        self._updating = True
+        try:
+            select_in_outliner(names)
+        finally:
+            self._updating = False
 
     def _populate_node_item(self, node: Dict[str, Any]):
         from qtpy import QtCore, QtGui, QtWidgets
@@ -780,6 +877,7 @@ class MayaLeftSidebarWidget:
             label = f"{node['name']}"
             item = QtWidgets.QTreeWidgetItem([label])
             item.setData(0, QtCore.Qt.UserRole, node["owner_object"])
+            item.setData(0, _ROLE_NODE_KEY, (kind, node["owner_object"], node["name"]))
             item.setData(0, _ROLE_NODE_BADGE, node.get("badge", "SHP"))
             icon_map = {
                 "MESH": "dag_mesh",
@@ -796,6 +894,7 @@ class MayaLeftSidebarWidget:
             label = f"{node['name']}"
             item = QtWidgets.QTreeWidgetItem([label])
             item.setData(0, QtCore.Qt.UserRole, node["owner_object"])
+            item.setData(0, _ROLE_NODE_KEY, (kind, node["owner_object"], node["name"]))
             item.setData(0, _ROLE_NODE_BADGE, node.get("badge", "MOD"))
             item.setIcon(0, icons.get_icon("dag_modifier", 14))
             item.setForeground(0, QtGui.QBrush(QtGui.QColor("#7ED491")))
@@ -804,6 +903,8 @@ class MayaLeftSidebarWidget:
         # TRANSFORM node
         item = QtWidgets.QTreeWidgetItem([node["name"]])
         item.setData(0, QtCore.Qt.UserRole, node["name"])
+        item.setData(0, _ROLE_NODE_KEY, (kind, node["name"]))
+        item.setData(0, _ROLE_NODE_SELECTED, bool(node.get("selected")))
         item.setData(0, _ROLE_NODE_BADGE, node.get("badge", "MSH"))
         item.setData(0, _ROLE_NODE_LINKED, bool(node.get("linked")))
         item.setIcon(0, icons.get_icon("dag_transform", 15))
@@ -826,6 +927,8 @@ class MayaLeftSidebarWidget:
         return item
 
     def refresh(self) -> Dict[str, Any]:
+        from qtpy import QtCore
+
         if self._updating:
             return get_dag_outliner_snapshot(
                 filter_text=self.txt_search.text(),
@@ -839,18 +942,36 @@ class MayaLeftSidebarWidget:
                 filter_text=self.txt_search.text(),
                 show_shapes=self.chk_shapes.isChecked(),
             )
-            self.tree.blockSignals(True)
-            self.tree.clear()
-            for rnode in snap.get("roots", ()):
-                top_item = self._populate_node_item(rnode)
-                self.tree.addTopLevelItem(top_item)
-                if rnode.get("selected") or any(
-                    c.get("kind") == "TRANSFORM" for c in rnode.get("children", ())
-                ):
-                    top_item.setExpanded(True)
-                if rnode.get("selected"):
-                    top_item.setSelected(True)
-            self.tree.blockSignals(False)
+            def items(parent):
+                for index in range(parent.childCount()):
+                    item = parent.child(index)
+                    yield item
+                    yield from items(item)
+
+            expansion = getattr(self, "_node_expansion", {})
+            for item in items(self.tree.invisibleRootItem()):
+                key = item.data(0, _ROLE_NODE_KEY)
+                if key and item.childCount():
+                    expansion[tuple(key)] = item.isExpanded()
+            self._node_expansion = expansion
+            current = self.tree.currentItem()
+            current_key = current.data(0, _ROLE_NODE_KEY) if current is not None else None
+            scroll = self.tree.verticalScrollBar().value()
+            blocked = self.tree.blockSignals(True)
+            try:
+                self.tree.clear()
+                for rnode in snap.get("roots", ()):
+                    self.tree.addTopLevelItem(self._populate_node_item(rnode))
+                for item in items(self.tree.invisibleRootItem()):
+                    key = item.data(0, _ROLE_NODE_KEY)
+                    if key and tuple(key) in expansion:
+                        item.setExpanded(expansion[tuple(key)])
+                    item.setSelected(bool(item.data(0, _ROLE_NODE_SELECTED)))
+                    if current_key and key == current_key:
+                        self.tree.setCurrentItem(item, 0, QtCore.QItemSelectionModel.NoUpdate)
+                self.tree.verticalScrollBar().setValue(scroll)
+            finally:
+                self.tree.blockSignals(blocked)
             return snap
         finally:
             self._updating = False

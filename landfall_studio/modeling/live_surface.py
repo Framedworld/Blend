@@ -35,7 +35,7 @@ def _resolve_mesh_object(obj_or_name: Any) -> Any:
         obj = bpy.data.objects.get(obj_or_name)
     else:
         obj = obj_or_name
-    if obj is not None and getattr(obj, "type", "") == "MESH":
+    if obj is not None and getattr(obj, "type", "") == "MESH" and getattr(obj, "data", None) is not None:
         return obj
     return None
 
@@ -144,15 +144,19 @@ def set_live_surface(obj_or_name: Any = None, toggle: bool = False) -> Dict[str,
     import bpy
 
     if obj_or_name is None:
-        obj = getattr(bpy.context.view_layer.objects, "active", None)
+        candidate = getattr(bpy.context.view_layer.objects, "active", None)
+        obj = _resolve_mesh_object(candidate)
     else:
+        candidate = obj_or_name
         obj = _resolve_mesh_object(obj_or_name)
 
     current_live = get_live_surface_object()
     if obj is None:
-        if toggle and current_live is not None:
+        if candidate is None and toggle and current_live is not None:
             return clear_live_surface()
         return {"ok": False, "error": "Make Live requires a target mesh object."}
+    if getattr(obj, "library", None) is not None:
+        return {"ok": False, "error": "Make Live requires a local editable mesh object."}
 
     if toggle and current_live is not None and current_live.name == obj.name:
         return clear_live_surface()
@@ -185,6 +189,7 @@ def set_live_surface(obj_or_name: Any = None, toggle: bool = False) -> Dict[str,
         scene[_LIVE_SCENE_KEY] = obj.name
 
     # Pre-warm BVH cache
+    invalidate_live_surface_cache()
     _get_or_build_live_bvh(obj)
 
     return {
@@ -196,6 +201,23 @@ def set_live_surface(obj_or_name: Any = None, toggle: bool = False) -> Dict[str,
     }
 
 
+def invalidate_live_surface_cache(depsgraph: Any = None) -> None:
+    """Invalidate via Studio's existing depsgraph subscriber after geometry changes."""
+    if depsgraph is None:
+        _live_bvh_cache["bvh"] = None
+        return
+    obj = get_live_surface_object()
+    if obj is None:
+        _live_bvh_cache["bvh"] = None
+        return
+    for update in getattr(depsgraph, "updates", ()):
+        updated = getattr(update, "id", None)
+        updated = getattr(updated, "original", updated)
+        if updated in (obj, obj.data) and bool(getattr(update, "is_updated_geometry", True)):
+            _live_bvh_cache["bvh"] = None
+            return
+
+
 def _get_or_build_live_bvh(live_obj: Any = None):
     """Build or return a cached world-space `BVHTree` strictly for `live_obj`."""
     import bmesh
@@ -205,6 +227,10 @@ def _get_or_build_live_bvh(live_obj: Any = None):
     obj = live_obj if live_obj is not None else get_live_surface_object()
     if obj is None or getattr(obj, "type", "") != "MESH" or obj.data is None:
         return None
+    if obj.mode == "EDIT":
+        # Edit BMesh changes have not necessarily reached the Mesh datablock yet.
+        obj.update_from_editmode()
+        invalidate_live_surface_cache()
 
     mesh = obj.data
     mw = obj.matrix_world

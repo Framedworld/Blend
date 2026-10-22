@@ -15,6 +15,68 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
+
+def elided_label(text='', parent=None):
+    """Keep long production names readable without setting a panel's width."""
+    from qtpy import QtCore, QtWidgets
+
+    class ElidedLabel(QtWidgets.QLabel):
+        def __init__(self):
+            self.full_text = ''
+            super().__init__(parent)
+            self.setMinimumWidth(0)
+            self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+            self.setText(text)
+        def setText(self, value):
+            self.full_text = str(value)
+            self.setToolTip(self.full_text)
+            self._fit_text()
+        def _fit_text(self):
+            shown = self.fontMetrics().elidedText(self.full_text, QtCore.Qt.ElideMiddle, max(0, self.width()-16))
+            if shown != super().text():
+                super().setText(shown)
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self._fit_text()
+        def changeEvent(self, event):
+            super().changeEvent(event)
+            if event.type() in (QtCore.QEvent.FontChange, QtCore.QEvent.StyleChange):
+                self._fit_text()
+        def sizeHint(self):
+            return QtCore.QSize(80, super().sizeHint().height())
+        def minimumSizeHint(self):
+            return QtCore.QSize(0, super().minimumSizeHint().height())
+
+    return ElidedLabel()
+
+
+def compact_double_spin(parent=None):
+    """A readable numeric editor inside both native-hosted and floating panels."""
+    from qtpy import QtCore, QtWidgets
+
+    class DenseSpin(QtWidgets.QDoubleSpinBox):
+        def _fit_editor(self):
+            self.lineEdit().setGeometry(4, 2, max(1, self.width()-8), max(1, self.height()-4))
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self._fit_editor()
+        def showEvent(self, event):
+            super().showEvent(event)
+            self._fit_editor()
+
+    spin = DenseSpin(parent)
+    spin.setKeyboardTracking(False)
+    spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+    spin.setMinimumWidth(58)
+    spin.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+    spin.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+    spin.lineEdit().setMinimumWidth(0)
+    # Avoid applying the outer field's padding/border to its inner text editor.
+    spin.lineEdit().setStyleSheet(
+        'QLineEdit { border: none; border-radius: 0; padding: 0; '
+        'background: transparent; color: #DCE1E6; min-width: 0; }')
+    return spin
+
 MAYA_TOKENS: Dict[str, str] = {
     "void": "#111315",
     "bg_deep": "#17191C",
@@ -107,7 +169,7 @@ def get_studio_stylesheet() -> str:
         background: transparent;
         color: {t['text_primary']};
         font-weight: 700;
-        font-size: 9px;
+        font-size: 10px;
         letter-spacing: 0.8px;
     }}
 
@@ -115,7 +177,7 @@ def get_studio_stylesheet() -> str:
         background: transparent;
         color: #68717C;
         font-weight: 700;
-        font-size: 8px;
+        font-size: 10px;
         letter-spacing: 1.0px;
     }}
 
@@ -126,7 +188,7 @@ def get_studio_stylesheet() -> str:
         border-radius: 3px;
         padding: 1px 6px;
         font-weight: 700;
-        font-size: 9px;
+        font-size: 10px;
     }}
 
     QLabel#MayaBadgeGreen {{
@@ -136,7 +198,7 @@ def get_studio_stylesheet() -> str:
         border-radius: 10px;
         padding: 1px 8px;
         font-weight: 700;
-        font-size: 9px;
+        font-size: 10px;
     }}
 
     QLabel#MayaBadgeAmber {{
@@ -146,7 +208,7 @@ def get_studio_stylesheet() -> str:
         border-radius: 3px;
         padding: 1px 6px;
         font-weight: 700;
-        font-size: 9px;
+        font-size: 10px;
     }}
 
     QLabel#MayaMutedLabel {{
@@ -159,9 +221,9 @@ def get_studio_stylesheet() -> str:
         background-color: #262A30;
         color: {t['text_primary']};
         border: 1px solid #343941;
-        border-radius: 3px;
-        padding: 2px 7px;
-        font-size: 10px;
+        border-radius: 4px;
+        padding: 2px 9px;
+        font-size: 11px;
     }}
 
     QToolButton:hover, QPushButton:hover {{
@@ -186,10 +248,10 @@ def get_studio_stylesheet() -> str:
         background-color: #25292E;
         color: #ABB1BA;
         border: 1px solid #343941;
-        border-radius: 2px;
-        padding: 1px 6px;
-        font-size: 9px;
-        font-weight: 600;
+        border-radius: 3px;
+        padding: 1px 9px;
+        font-size: 11px;
+        font-weight: 500;
     }}
 
     QPushButton#MayaMaskPill:checked {{
@@ -205,7 +267,7 @@ def get_studio_stylesheet() -> str:
         border: 1px solid #323740;
         border-radius: 10px;
         padding: 1px 9px;
-        font-size: 9px;
+        font-size: 10px;
         font-weight: 700;
     }}
 
@@ -215,7 +277,7 @@ def get_studio_stylesheet() -> str:
         border: 1px solid #32373E;
         border-radius: 3px;
         padding: 3px 2px 1px 2px;
-        font-size: 8px;
+        font-size: 10px;
         font-weight: 600;
     }}
 
@@ -282,8 +344,8 @@ def get_studio_stylesheet() -> str:
         border-bottom: 2px solid transparent;
         padding: 4px 11px;
         margin-right: 1px;
-        font-size: 9.5px;
-        font-weight: 600;
+        font-size: 11px;
+        font-weight: 500;
     }}
 
     QTabBar::tab:hover {{
@@ -315,7 +377,7 @@ def get_studio_stylesheet() -> str:
         border-right: 1px solid #262A30;
         border-bottom: 1px solid #262A30;
         padding: 2px 6px;
-        font-size: 8.5px;
+        font-size: 10px;
         font-weight: 700;
         letter-spacing: 0.6px;
     }}
@@ -355,6 +417,122 @@ def get_studio_stylesheet() -> str:
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
         height: 0px;
     }}
+
+    QFrame#MayaMainMenuBar {{
+        background-color: {t['void']};
+        border-bottom: 1px solid {t['border_dark']};
+    }}
+
+    QMenuBar {{
+        background: transparent;
+        color: {t['text_primary']};
+        font-size: 12px;
+        spacing: 2px;
+    }}
+
+    QMenuBar::item {{
+        background: transparent;
+        padding: 6px 8px;
+        border-radius: 3px;
+    }}
+
+    QMenuBar::item:selected, QMenuBar::item:pressed {{
+        background-color: {t['bg_hover']};
+        color: #FFFFFF;
+    }}
+
+    QMenuBar#MayaPanelMenuBar {{
+        background-color: {t['bg_panel']};
+        border-bottom: 1px solid {t['border_dark']};
+        font-size: 11px;
+    }}
+
+    QMenuBar#MayaPanelMenuBar::item {{
+        padding: 4px 8px;
+    }}
+
+    QMenu {{
+        background-color: {t['bg_header']};
+        color: {t['text_primary']};
+        border: 1px solid {t['border_light']};
+        padding: 4px 0px;
+        font-size: 12px;
+    }}
+
+    QMenu::item {{
+        padding: 5px 28px 5px 16px;
+    }}
+
+    QMenu::item:selected {{
+        background-color: {t['accent_teal_subtle']};
+        color: #FFFFFF;
+    }}
+
+    QMenu::separator {{
+        height: 1px;
+        background: {t['border_mid']};
+        margin: 4px 8px;
+    }}
+
+    QMenu::section {{
+        color: {t['text_muted']};
+        font-size: 10px;
+        font-weight: 600;
+        padding: 8px 16px 3px 16px;
+        background: transparent;
+    }}
+
+    QFrame#MayaCollapseHandle {{
+        background-color: {t['border_light']};
+        border-radius: 1px;
+    }}
+
+    QToolButton#MayaStatusIcon {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        padding: 0px;
+    }}
+
+    QToolButton#MayaStatusIcon:hover {{
+        background-color: {t['bg_hover']};
+        border-color: {t['border_light']};
+    }}
+
+    QToolButton#MayaStatusIcon:checked {{
+        background-color: {t['accent_teal_bg']};
+        border: 1px solid {t['accent_teal']};
+    }}
+
+    QPushButton#MayaAccentButton {{
+        background-color: {t['accent_teal_subtle']};
+        color: {t['text_accent']};
+        border: 1px solid {t['accent_teal']};
+        font-weight: 500;
+    }}
+
+    QToolButton#MayaModToggle {{
+        background-color: {t['bg_recess']};
+        color: {t['text_muted']};
+        border: 1px solid {t['border_mid']};
+        border-radius: 3px;
+        padding: 0px;
+        font-size: 10px;
+        font-weight: 600;
+    }}
+
+    QToolButton#MayaModToggle:checked {{
+        background-color: {t['accent_teal_bg']};
+        color: {t['text_bright']};
+        border: 1px solid {t['accent_teal']};
+    }}
+
+    QLabel#MayaHelpLine {{
+        background-color: {t['void']};
+        color: {t['text_secondary']};
+        font-size: 11px;
+        padding: 0px 12px;
+    }}
     """
 
 
@@ -363,6 +541,7 @@ def apply_studio_style(widget: Any) -> None:
     if widget is None:
         return
     try:
+        widget.setProperty('landfallStudioUi', True)
         widget.setStyleSheet(get_studio_stylesheet())
     except Exception:
         pass
@@ -382,6 +561,51 @@ def _save_and_set_color(owner: Any, attr: str, rgba_or_rgb: Tuple[float, ...]) -
 
 
 _save_pre_restored_spaces: List[Tuple[Any, bool, bool, bool, bool]] = []
+
+
+def _set_view3d_region_flags(
+    win: Any,
+    area: Any,
+    sp: Any,
+    toolbar: Optional[bool] = None,
+    header: Optional[bool] = None,
+    tool_header: Optional[bool] = None,
+    show_text: Optional[bool] = None,
+) -> None:
+    """Safely update 3D Viewport region visibility flags with a valid window in context.
+
+    Blender's `rna_Space_show_region_*_update` calls `ED_region_visibility_change_update` ->
+    `ED_area_init(C, CTX_wm_window(C), area)` -> `WM_window_get_active_workspace(win)`, which
+    crashes with `EXCEPTION_ACCESS_VIOLATION` if `bpy.context.window` is `None` (e.g. inside a
+    `bpy.app.timers` callback or after `bpy.ops.screen.area_close()` during dock teardown).
+    """
+    import bpy
+
+    if show_text is not None:
+        try:
+            if hasattr(sp, "overlay") and hasattr(sp.overlay, "show_text"):
+                if bool(sp.overlay.show_text) != bool(show_text):
+                    sp.overlay.show_text = bool(show_text)
+        except Exception:
+            pass
+
+    if win is None or getattr(win, "screen", None) is None:
+        return
+
+    try:
+        # Region-visibility updates need a window in context (timers and post-area_close callbacks have none)
+        with bpy.context.temp_override(window=win, screen=win.screen, area=area):
+            if toolbar is not None and hasattr(sp, "show_region_toolbar"):
+                if bool(sp.show_region_toolbar) != bool(toolbar):
+                    sp.show_region_toolbar = bool(toolbar)
+            if header is not None and hasattr(sp, "show_region_header"):
+                if bool(sp.show_region_header) != bool(header):
+                    sp.show_region_header = bool(header)
+            if tool_header is not None and hasattr(sp, "show_region_tool_header"):
+                if bool(sp.show_region_tool_header) != bool(tool_header):
+                    sp.show_region_tool_header = bool(tool_header)
+    except Exception:
+        pass
 
 
 def _on_save_pre_restore_viewport_headers(*_args) -> None:
@@ -406,16 +630,15 @@ def _on_save_pre_restore_viewport_headers(*_args) -> None:
                         cur_thdr = bool(getattr(sp, "show_region_tool_header", False))
                         cur_txt = bool(getattr(getattr(sp, "overlay", None), "show_text", False))
                         _save_pre_restored_spaces.append((sp, cur_tb, cur_hdr, cur_thdr, cur_txt))
-                        try:
-                            sp.show_region_toolbar = True
-                            if hasattr(sp, "show_region_header"):
-                                sp.show_region_header = True
-                            if hasattr(sp, "show_region_tool_header"):
-                                sp.show_region_tool_header = True
-                            if hasattr(sp, "overlay") and hasattr(sp.overlay, "show_text"):
-                                sp.overlay.show_text = True
-                        except Exception:
-                            pass
+                        _set_view3d_region_flags(
+                            win,
+                            area,
+                            sp,
+                            toolbar=True,
+                            header=True,
+                            tool_header=True,
+                            show_text=True,
+                        )
     except Exception:
         pass
 
@@ -426,15 +649,30 @@ def _on_save_post_reapply_viewport_headers(*_args) -> None:
     if not _save_pre_restored_spaces:
         return
     try:
+        import bpy
+
+        wm = getattr(bpy.context, "window_manager", None)
+        sp_owner = {}
+        for win in (wm.windows if wm else []):
+            if not win.screen:
+                continue
+            for area in win.screen.areas:
+                if area.type == "VIEW_3D" and area.spaces.active is not None:
+                    sp_owner[int(area.spaces.active.as_pointer())] = (win, area)
+
         for sp, cur_tb, cur_hdr, cur_thdr, cur_txt in _save_pre_restored_spaces:
             try:
-                sp.show_region_toolbar = cur_tb
-                if hasattr(sp, "show_region_header"):
-                    sp.show_region_header = cur_hdr
-                if hasattr(sp, "show_region_tool_header"):
-                    sp.show_region_tool_header = cur_thdr
-                if hasattr(sp, "overlay") and hasattr(sp.overlay, "show_text"):
-                    sp.overlay.show_text = cur_txt
+                win_area = sp_owner.get(int(sp.as_pointer()))
+                if win_area is not None:
+                    _set_view3d_region_flags(
+                        win_area[0],
+                        win_area[1],
+                        sp,
+                        toolbar=cur_tb,
+                        header=cur_hdr,
+                        tool_header=cur_thdr,
+                        show_text=cur_txt,
+                    )
             except Exception:
                 pass
     finally:
@@ -538,7 +776,7 @@ def apply_modern_maya_theme_to_blender(
                             sp.overlay.show_text = False
                     except Exception:
                         pass
-                    if hide_stock_view3d_toolbar and getattr(bpy.context, "window", None) is not None and hasattr(sp, "show_region_toolbar"):
+                    if hide_stock_view3d_toolbar and hasattr(sp, "show_region_toolbar"):
                         ptr = int(sp.as_pointer())
                         if not any(p[0] == ptr for p in _saved_region_flags):
                             _saved_region_flags.append(
@@ -550,16 +788,15 @@ def apply_modern_maya_theme_to_blender(
                                     bool(getattr(sp, "show_region_tool_header", True)),
                                 )
                             )
-                        try:
-                            if sp.show_region_toolbar:
-                                sp.show_region_toolbar = False
-                            if hasattr(sp, "show_region_header") and sp.show_region_header:
-                                sp.show_region_header = False
-                            if hasattr(sp, "show_region_tool_header") and sp.show_region_tool_header:
-                                sp.show_region_tool_header = False
-                            hidden_toolbars += 1
-                        except Exception:
-                            pass
+                        _set_view3d_region_flags(
+                            win,
+                            area,
+                            sp,
+                            toolbar=False,
+                            header=False,
+                            tool_header=False,
+                        )
+                        hidden_toolbars += 1
 
     return {
         "ok": True,
@@ -620,16 +857,15 @@ def restore_blender_theme(context: Any = None) -> Dict[str, Any]:
                     if sp is not None:
                         # Fallback to standard visible regions (True, False, True, True) if file was reloaded and pointer changed
                         tb, _ui, hdr, thdr = saved_map.get(int(sp.as_pointer()), (True, False, True, True))
-                        try:
-                            sp.show_region_toolbar = tb
-                            if hasattr(sp, "show_region_header"):
-                                sp.show_region_header = hdr
-                            if hasattr(sp, "show_region_tool_header"):
-                                sp.show_region_tool_header = thdr
-                            if hasattr(sp, "overlay") and hasattr(sp.overlay, "show_text"):
-                                sp.overlay.show_text = True
-                        except Exception:
-                            pass
+                        _set_view3d_region_flags(
+                            win,
+                            area,
+                            sp,
+                            toolbar=tb,
+                            header=hdr,
+                            tool_header=thdr,
+                            show_text=True,
+                        )
     except Exception:
         pass
 

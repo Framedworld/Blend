@@ -9,7 +9,7 @@ Provides Maya's signature right-sidebar **Modeling Toolkit** tab containing:
 3. **Live In-Viewport Caddy Parameters (`polyExtrudeFace1`, `polyBevel1`, `polyBridgeEdge1`, `polyConnectComponents1`):**
    - Synchronized live with the 3D Viewport floating caddy
 4. **Quad Draw Retopology Controls:**
-   - Plotted dot counter + `Fill Quad (Shift)`, `Extrude Strip (Tab)`, `Loop Cut (Ctrl)`, `Relax (Shift-Drag)`, `Clear Dots`
+   - Plotted dot counter + Fill Quad, Extrude Strip, Insert Loop and Relax Mesh buttons
 5. **UV Texel Density & Unwrap Bar:**
    - `Get TD`, `Set TD` (`px/m` @ `2048`), `Unwrap & Pack`, `Clean UV Sets`
 6. **Scene Diagnostics & Construction History Inspector:**
@@ -49,31 +49,114 @@ def create_modeling_toolkit_widget(parent: Any = None):
             outer.setContentsMargins(6, 6, 6, 6)
             outer.setSpacing(6)
 
-            # 1. Selection Masks Bar
-            sec_sel = QtWidgets.QLabel("SELECTION & SYMMETRY")
-            sec_sel.setObjectName("MayaSectionHeader")
-            outer.addWidget(sec_sel)
+            def section(text):
+                header = QtWidgets.QLabel(text)
+                header.setObjectName("MayaSectionHeader")
+                outer.addWidget(header)
+                return header
 
+            def button(label, icon_name, callback, tip="", height=24, size=14):
+                btn = QtWidgets.QPushButton(label)
+                if icon_name:
+                    btn.setIcon(icons.get_icon(icon_name, size))
+                btn.setFixedHeight(height)
+                if tip:
+                    btn.setToolTip(tip)
+                btn.clicked.connect(callback)
+                return btn
+
+            # Selection: Maya's toolkit leads with component modes,
+            # symmetry and soft selection, the three things set per edit.
+            section("SELECTION")
             mask_row = QtWidgets.QHBoxLayout()
             mask_row.setSpacing(3)
-            for label, icon_name, mode_code in (
-                ("Object", "mask_obj", "TOGGLE"),
-                ("Vert", "mask_vert", "VERT"),
-                ("Edge", "mask_edge", "EDGE"),
-                ("Face", "mask_face", "FACE"),
-                ("UV", "mask_uv", "UV"),
+            for label, icon_name, mode_code, key in (
+                ("Object", "mask_obj", "OBJECT", "F8"),
+                ("Vertex", "mask_vert", "VERT", "F9"),
+                ("Edge", "mask_edge", "EDGE", "F10"),
+                ("Face", "mask_face", "FACE", "F11"),
+                ("UV", "mask_uv", "UV", "F12"),
             ):
-                btn = QtWidgets.QPushButton(label)
-                btn.setIcon(icons.get_icon(icon_name, 14))
-                btn.setFixedHeight(24)
-                btn.clicked.connect(lambda _c=False, m=mode_code: self._set_component_mode(m))
-                mask_row.addWidget(btn)
+                mask_row.addWidget(button(label, icon_name,
+                    lambda _c=False, m=mode_code: self._set_component_mode(m),
+                    f"{label} selection ({key})"))
             outer.addLayout(mask_row)
 
-            # 2. Transform Constraints & Scoped Make Live
-            sec_live = QtWidgets.QLabel("TRANSFORM CONSTRAINTS  |  MAKE LIVE")
-            sec_live.setObjectName("MayaSectionHeader")
-            outer.addWidget(sec_live)
+            option_row = QtWidgets.QHBoxLayout()
+            option_row.setSpacing(10)
+            self.chk_symmetry = QtWidgets.QCheckBox("Symmetry X")
+            self.chk_symmetry.setToolTip("Mirror component edits across the object's X axis")
+            self.chk_symmetry.toggled.connect(lambda on: self._set_tool_setting("symmetry_x", on))
+            self.chk_soft = QtWidgets.QCheckBox("Soft Select (B)")
+            self.chk_soft.setToolTip("Falloff for component transforms; radius in Tool Settings")
+            self.chk_soft.toggled.connect(lambda on: self._set_tool_setting("soft_select_enabled", on))
+            option_row.addWidget(self.chk_symmetry)
+            option_row.addWidget(self.chk_soft)
+            option_row.addStretch(1)
+            outer.addLayout(option_row)
+
+            # Mesh: whole-object operations.
+            section("MESH")
+            mesh_row = QtWidgets.QHBoxLayout()
+            mesh_row.setSpacing(4)
+            for label, tip, fn in (
+                ("Combine", "Join the selected meshes into the active one (Ctrl+J)",
+                 lambda: self._run_menu("object.join")),
+                ("Separate", "Split loose parts into separate objects",
+                 lambda: self._run_menu("mesh.separate", type="LOOSE")),
+                ("Smooth", "Add a subdivision surface, as Maya's Smooth",
+                 lambda: self._add_modifier("SUBSURF")),
+                ("Mirror", "Add a Mirror modifier across X",
+                 lambda: self._add_modifier("MIRROR")),
+            ):
+                mesh_row.addWidget(button(label, "", fn, tip, height=23))
+            outer.addLayout(mesh_row)
+
+            # Components: the four caddy operations.
+            section("COMPONENTS")
+            grid = QtWidgets.QGridLayout()
+            grid.setHorizontalSpacing(4)
+            grid.setVerticalSpacing(4)
+            for idx, (lbl, icn, tool, tip) in enumerate((
+                ("Extrude", "extrude", "EXTRUDE", "Extrude faces (Ctrl+E); drag the manipulator or edit the caddy"),
+                ("Bevel", "bevel", "BEVEL", "Bevel edges (Ctrl+B)"),
+                ("Bridge", "bridge", "BRIDGE", "Bridge two selected edge loops"),
+                ("Connect", "connect", "CONNECT", "Connect selected edges with new edge loops"),
+            )):
+                grid.addWidget(button(lbl, icn, lambda _c=False, t=tool: self._invoke_caddy(t), tip, 26, 16),
+                               idx // 2, idx % 2)
+            outer.addLayout(grid)
+
+            # The open operation's live values, mirroring the viewport caddy.
+            self.lbl_caddy_header = QtWidgets.QLabel("")
+            self.lbl_caddy_header.setObjectName("MayaSubtleNote")
+            self.lbl_caddy_header.setWordWrap(True)
+            self.lbl_caddy_header.setStyleSheet("color: #8B95A5; padding: 1px 4px;")
+            outer.addWidget(self.lbl_caddy_header)
+
+            self.caddy_form_host = QtWidgets.QWidget()
+            self.caddy_form = QtWidgets.QFormLayout(self.caddy_form_host)
+            self.caddy_form.setContentsMargins(4, 2, 4, 2)
+            self.caddy_form.setSpacing(3)
+            outer.addWidget(self.caddy_form_host)
+
+            # Tools: interactive tools, as in Maya's toolkit.
+            section("TOOLS")
+            tools = QtWidgets.QGridLayout()
+            tools.setHorizontalSpacing(4)
+            tools.setVerticalSpacing(4)
+            for idx, (lbl, icn, cb, tip) in enumerate((
+                ("Multi-Cut", "", lambda: self._run_menu("mesh.knife_tool", invoke=True),
+                 "Cut new edges across faces (K)"),
+                ("Quad Draw", "quad_draw", self._on_quad_draw_activate,
+                 "Draw retopology quads on the Live surface"),
+                ("Target Weld", "target_weld", self._on_target_weld,
+                 "Drag one vertex onto another to weld them"),
+                ("Make Live", "make_live", self._on_make_live,
+                 "Snap new geometry to the selected surface"),
+            )):
+                tools.addWidget(button(lbl, icn, cb, tip, 26, 16), idx // 2, idx % 2)
+            outer.addLayout(tools)
 
             live_row = QtWidgets.QHBoxLayout()
             live_row.setSpacing(4)
@@ -83,73 +166,24 @@ def create_modeling_toolkit_widget(parent: Any = None):
                 "border-radius: 3px; padding: 3px 6px; font-weight: 600;"
             )
             live_row.addWidget(self.lbl_live_target, 1)
-
-            btn_make_live = QtWidgets.QPushButton("Make Live")
-            btn_make_live.setIcon(icons.get_icon("make_live", 14))
-            btn_make_live.setFixedHeight(23)
-            btn_make_live.clicked.connect(self._on_make_live)
-            live_row.addWidget(btn_make_live)
-
-            btn_clear_live = QtWidgets.QPushButton("Clear")
-            btn_clear_live.setFixedHeight(23)
-            btn_clear_live.clicked.connect(self._on_clear_live)
+            btn_clear_live = button("Clear", "", self._on_clear_live, "Stop snapping to the Live surface", 23)
             live_row.addWidget(btn_clear_live)
             outer.addLayout(live_row)
 
-            # 3. Mesh & Components Tool Grid (Caddy-Enabled)
-            sec_tools = QtWidgets.QLabel("COMPONENTS & TOOLS  (IN-VIEWPORT CADDY)")
-            sec_tools.setObjectName("MayaSectionHeader")
-            outer.addWidget(sec_tools)
-
-            grid = QtWidgets.QGridLayout()
-            grid.setHorizontalSpacing(4)
-            grid.setVerticalSpacing(4)
-
-            tool_buttons = [
-                ("Extrude", "extrude", lambda: self._invoke_caddy("EXTRUDE")),
-                ("Bevel", "bevel", lambda: self._invoke_caddy("BEVEL")),
-                ("Bridge", "bridge", lambda: self._invoke_caddy("BRIDGE")),
-                ("Connect", "connect", lambda: self._invoke_caddy("CONNECT")),
-                ("Target Weld", "target_weld", self._on_target_weld),
-                ("Quad Draw", "quad_draw", self._on_quad_draw_activate),
-            ]
-            for idx, (lbl, icn, cb) in enumerate(tool_buttons):
-                btn = QtWidgets.QPushButton(lbl)
-                btn.setIcon(icons.get_icon(icn, 16))
-                btn.setFixedHeight(26)
-                btn.clicked.connect(cb)
-                grid.addWidget(btn, idx // 2, idx % 2)
-            outer.addLayout(grid)
-
-            # 4. Live Caddy Inspector
-            self.lbl_caddy_header = QtWidgets.QLabel("ACTIVE CADDY: None")
-            self.lbl_caddy_header.setObjectName("MayaSectionHeader")
-            outer.addWidget(self.lbl_caddy_header)
-
-            self.caddy_form_host = QtWidgets.QWidget()
-            self.caddy_form = QtWidgets.QFormLayout(self.caddy_form_host)
-            self.caddy_form.setContentsMargins(4, 2, 4, 2)
-            self.caddy_form.setSpacing(3)
-            outer.addWidget(self.caddy_form_host)
-
-            # 5. Quad Draw Retopology Chord Strip
-            sec_qd = QtWidgets.QLabel("QUAD DRAW RETOPOLOGY")
-            sec_qd.setObjectName("MayaSectionHeader")
-            outer.addWidget(sec_qd)
-
             qd_row1 = QtWidgets.QHBoxLayout()
             qd_row1.setSpacing(3)
-            self.lbl_qd_dots = QtWidgets.QLabel("Dots: 0")
-            self.lbl_qd_dots.setStyleSheet("color: #4ADE80; font-weight: 700; padding: 0 4px;")
+            self.lbl_qd_dots = QtWidgets.QLabel("Quad Draw: 0 dots")
+            self.lbl_qd_dots.setStyleSheet("color: #8B95A5; padding: 0 4px;")
             qd_row1.addWidget(self.lbl_qd_dots)
 
-            for lbl, cb in (
-                ("Fill [Shift]", self._on_qd_fill),
-                ("Strip [Tab]", self._on_qd_strip),
-                ("Loop [Ctrl]", self._on_qd_loop),
-                ("Relax", self._on_qd_relax),
+            for lbl, tip, cb in (
+                ("Fill", "Build a quad from the four most recent plotted dots.", self._on_qd_fill),
+                ("Strip +X", "Extrude the selected boundary edge 0.4 units along world X; uses the first boundary edge when none is selected.", self._on_qd_strip),
+                ("Loop", "Insert a centered loop across the first quad strip. Ctrl-click a retopology edge in Quad Draw to choose a strip.", self._on_qd_loop),
+                ("Relax", "Smooth retopology vertices and project them back onto the live surface.", self._on_qd_relax),
             ):
                 b = QtWidgets.QPushButton(lbl)
+                b.setToolTip(tip)
                 b.setFixedHeight(22)
                 b.clicked.connect(cb)
                 qd_row1.addWidget(b)
@@ -182,14 +216,14 @@ def create_modeling_toolkit_widget(parent: Any = None):
             outer.addLayout(uv_row)
 
             # 7. Scene Diagnostics & Non-Deformer History
-            sec_diag = QtWidgets.QLabel("SCENE DIAGNOSTICS & HISTORY")
+            sec_diag = QtWidgets.QLabel("HISTORY & CLEANUP")
             sec_diag.setObjectName("MayaSectionHeader")
             outer.addWidget(sec_diag)
 
             hist_row = QtWidgets.QHBoxLayout()
             hist_row.setSpacing(4)
             for lbl, icn, cb in (
-                ("Non-Def Hist", "non_def_history", self._on_non_def_history),
+                ("Non-Deformer History", "non_def_history", self._on_non_def_history),
                 ("Freeze", "freeze_transforms", self._on_freeze_guarded),
                 ("Audit Scene", "scene_audit", self._on_run_diagnostics),
             ):
@@ -200,7 +234,7 @@ def create_modeling_toolkit_widget(parent: Any = None):
                 hist_row.addWidget(b)
             outer.addLayout(hist_row)
 
-            self.lbl_diag_status = QtWidgets.QLabel("Diagnostics: Ready (Read-Only)")
+            self.lbl_diag_status = QtWidgets.QLabel("Audit Scene checks topology without changing it.")
             self.lbl_diag_status.setStyleSheet(
                 "background-color: #16181B; color: #9BA5B4; border: 1px solid #2C313A; "
                 "border-radius: 3px; padding: 4px 6px; font-size: 10px;"
@@ -210,6 +244,24 @@ def create_modeling_toolkit_widget(parent: Any = None):
 
             outer.addStretch(1)
             self.refresh_from_scene()
+
+        def _set_tool_setting(self, key, value):
+            if getattr(self, "_syncing", False):
+                return
+            from . import tool_settings
+            tool_settings.set_tool_setting(key, value)
+            self.refresh_from_scene()
+
+        def _run_menu(self, op_path, invoke=False, **props):
+            from . import menus
+            menus.run_op(op_path, invoke=invoke, **props)
+            self.refresh_from_scene()
+
+        def _add_modifier(self, kind):
+            from . import menus
+            result = menus._safe_call(lambda: menus._add_mod(kind), kind.title())
+            self.refresh_from_scene()
+            return result
 
         def _set_component_mode(self, mode_code: str):
             import bpy
@@ -221,7 +273,9 @@ def create_modeling_toolkit_widget(parent: Any = None):
             self.refresh_from_scene()
 
         def _on_make_live(self):
-            modeling.set_live_surface(toggle=True)
+            result = modeling.set_live_surface(toggle=True)
+            if not result.get("ok"):
+                self.lbl_diag_status.setText(result.get("error", "Make Live could not finish."))
             self.refresh_from_scene()
 
         def _on_clear_live(self):
@@ -229,7 +283,13 @@ def create_modeling_toolkit_widget(parent: Any = None):
             self.refresh_from_scene()
 
         def _invoke_caddy(self, tool_type: str):
-            modeling.invoke_modeling_caddy(tool_type)
+            if tool_type == "EXTRUDE":
+                from ..modeling import caddy
+                result = caddy.begin_maya_extrude()
+            else:
+                result = modeling.invoke_modeling_caddy(tool_type)
+            if not result.get("ok"):
+                self.lbl_diag_status.setText(result.get("error", "Select components for this tool."))
             self.refresh_from_scene()
 
         def _on_target_weld(self):
@@ -237,8 +297,8 @@ def create_modeling_toolkit_widget(parent: Any = None):
             self.refresh_from_scene()
 
         def _on_quad_draw_activate(self):
-            modeling.set_quad_draw_active(True)
-            modeling.ensure_retopo_mesh()
+            from . import menus
+            menus.run_op("landfall_studio.quad_draw_modal", invoke=True)
             self.refresh_from_scene()
 
         def _on_qd_fill(self):
@@ -321,7 +381,18 @@ def create_modeling_toolkit_widget(parent: Any = None):
 
             # 2. Quad Draw dots
             qd_st = modeling.get_quad_draw_overlay_data()
-            self.lbl_qd_dots.setText(f"Dots: {qd_st['dot_count']}")
+            self.lbl_qd_dots.setText(f"Quad Draw: {qd_st['dot_count']} dots")
+
+            from . import tool_settings
+            snap = tool_settings.get_tool_settings_snapshot()
+            self._syncing = True
+            try:
+                for box, value in ((self.chk_symmetry, snap["symmetry"]["x"]),
+                                   (self.chk_soft, snap["soft_select_enabled"])):
+                    if box.isChecked() != bool(value):
+                        box.setChecked(bool(value))
+            finally:
+                self._syncing = False
 
             # 3. Active Caddy rows
             while self.caddy_form.rowCount() > 0:
@@ -329,9 +400,7 @@ def create_modeling_toolkit_widget(parent: Any = None):
 
             c_st = modeling.get_active_caddy_state()
             if c_st.get("open"):
-                self.lbl_caddy_header.setText(
-                    f"ACTIVE CADDY: {c_st['node_title']}  ({c_st['object_name']})"
-                )
+                self.lbl_caddy_header.setText(f"{c_st['node_title']} · {c_st['object_name']}")
                 for row in c_st.get("rows", []):
                     lbl = QtWidgets.QLabel(str(row["label"]))
                     val = QtWidgets.QLabel(str(row["value"]))
@@ -341,7 +410,7 @@ def create_modeling_toolkit_widget(parent: Any = None):
                     )
                     self.caddy_form.addRow(lbl, val)
             else:
-                self.lbl_caddy_header.setText("ACTIVE CADDY: None (Select Extrude / Bevel / Bridge / Connect)")
+                self.lbl_caddy_header.setText("Select components, then Extrude, Bevel, Bridge or Connect.")
 
     widget = MayaModelingToolkitWidget(parent)
     _active_mtk_widgets.append(widget)

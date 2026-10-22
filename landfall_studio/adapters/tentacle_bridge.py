@@ -21,6 +21,23 @@ from ..bootstrap.deps import check_dependencies
 _tcl_instance: Optional[Any] = None
 _tentacle_state: str = "UNINITIALIZED"
 _pump_timer_fn: Optional[Any] = None
+_sculpt_suspended=None
+
+def suspend_sculpt_hotbox(enabled):
+    """Pause activation without rebinding/persisting the user's chosen shortcut."""
+    global _sculpt_suspended
+    module=sys.modules.get('tentacle.tcl_blender');tcl=_tcl_instance
+    if not module or not tcl:return
+    bridge=module._KeymapBridge
+    if enabled and _sculpt_suspended is None:
+        _sculpt_suspended=(tcl._on_activation_press,bridge.poller is not None)
+        if bridge.gesture_active:bridge.drive_release()
+        bridge.uninstall_poller()
+        tcl._on_activation_press=lambda *a,**k:None
+    elif not enabled and _sculpt_suspended is not None:
+        original,had_poller=_sculpt_suspended;tcl._on_activation_press=original
+        _sculpt_suspended=None
+        if had_poller:bridge.install_poller(tcl,tcl._activation_key_str)
 
 
 def get_state() -> str:
@@ -57,6 +74,23 @@ def register(
     import bpy
     import blendertk as btk
     import tentacle.tcl_blender as tcl_blender
+
+    # uitk's background page warm-up briefly realizes a suppressed full-screen
+    # window. Qt can deactivate a live Studio popup even though that window is
+    # never painted. Keep this optional work out of Sculpt and all live popups.
+    tcl_class = tcl_blender.TclBlender
+    if not getattr(tcl_class, '_studio_preload_guarded', False):
+        original_preload_next = tcl_class._preload_next
+        def _studio_preload_next(self):
+            from PySide6 import QtCore, QtWidgets
+            if (not self._retired and self._preload_queue and
+                    ((_sculpt_suspended is not None and self is _tcl_instance) or
+                     QtWidgets.QApplication.activePopupWidget() is not None)):
+                QtCore.QTimer.singleShot(1000, self._preload_next)
+                return
+            return original_preload_next(self)
+        tcl_class._preload_next = _studio_preload_next
+        tcl_class._studio_preload_guarded = True
 
     # Capture any timer registered by _QtHost.start_pump so we can unregister it immediately on teardown
     orig_timer_register = bpy.app.timers.register

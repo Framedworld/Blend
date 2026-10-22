@@ -36,6 +36,19 @@ _INPUT_META_KEY = "_lf_poly_input"
 _DISPLAY_LAYER_ROOT_NAME = "Maya_Display_Layers"
 _DISPLAY_LAYER_TAG = "_lf_display_layer"
 
+
+def _numeric_socket_type(socket, value):
+    """Only native scalar socket types belong in the numeric INPUTS editor."""
+    kind = str(getattr(socket, 'socket_type', ''))
+    if kind.startswith('NodeSocketBool') and isinstance(value, (bool, int)):
+        return 'int'
+    if kind.startswith('NodeSocketInt') and isinstance(value, int) and not isinstance(value, bool):
+        return 'int'
+    if (kind.startswith('NodeSocketFloat') and isinstance(value, (int, float))
+            and not isinstance(value, bool) and math.isfinite(value)):
+        return 'float'
+    return None
+
 # Canonical parameters for each Maya polygon primitive history node
 PRIMITIVE_SPECS: Dict[str, Dict[str, Any]] = {
     "CUBE": {
@@ -483,27 +496,17 @@ def get_object_inputs(obj: Any) -> List[Dict[str, Any]]:
                 if not ident:
                     continue
                 raw_val = _get_gn_socket_value(mod, ident, getattr(item, "default_value", 0.0))
-                if "Int" in stype or isinstance(raw_val, int) and not isinstance(raw_val, bool):
-                    atype = "int"
-                    val = int(raw_val)
-                elif "Bool" in stype or isinstance(raw_val, bool):
-                    atype = "int"
-                    val = 1 if bool(raw_val) else 0
-                elif hasattr(raw_val, "__len__") and not isinstance(raw_val, (str, bytes)):
-                    continue
-                else:
-                    atype = "float"
-                    try:
-                        val = round(float(raw_val), 4)
-                    except Exception:
-                        val = 0.0
+                numeric = _numeric_socket_type(item, raw_val)
+                atype = numeric or 'text'
+                val = (int(raw_val) if numeric == 'int' else round(float(raw_val), 4)) if numeric else str(getattr(raw_val, 'name', raw_val))
                 attrs.append(
                     {
                         "name": ident,
                         "label": label,
                         "value": val,
                         "type": atype,
-                        "editable": not is_datablock_linked(obj),
+                        "editable": bool(numeric) and not linked,
+                        "tip": '' if numeric else 'Edit this socket in the native Geometry Nodes editor',
                     }
                 )
         else:
@@ -646,6 +649,69 @@ def ensure_procedural_geonodes_modifier(
     }
 
 
+def _primitive_regeneration_error(obj: Any, meta: Dict[str, Any]) -> Optional[str]:
+    """History regeneration is valid only while the source is still its primitive."""
+    import bpy
+    from ..character import topology
+
+    mesh = obj.data
+    if mesh.users > 1:
+        return "Make this mesh single-user before editing primitive history"
+    if mesh.shape_keys is not None:
+        return "Primitive history cannot rebuild a mesh with shape keys; keep the shape keys and use transforms instead"
+    if getattr(mesh, "is_editmode", False):
+        obj.update_from_editmode()
+    if any(vertex.groups for vertex in mesh.vertices):
+        return "Primitive history cannot rebuild weighted vertices; use transforms or a duplicate without skin weights"
+    if len(mesh.color_attributes):
+        return "Primitive history cannot rebuild painted color attributes; use transforms or an unpainted duplicate"
+    if any(poly.material_index for poly in mesh.polygons):
+        return "Primitive history cannot rebuild per-face material assignments; use transforms instead"
+    if len({poly.use_smooth for poly in mesh.polygons}) > 1:
+        return "Primitive history cannot rebuild mixed face shading; use transforms instead"
+
+    expected_mesh = bpy.data.meshes.new("__landfall_primitive_validation")
+    expected_obj = bpy.data.objects.new("__landfall_primitive_validation", expected_mesh)
+    baseline = None
+    try:
+        baseline = _build_primitive_bmesh(meta.get("prim_type", "CUBE"), meta.get("params", {}))
+        baseline.to_mesh(expected_mesh)
+        expected_mesh.update()
+        def face_key(poly):
+            vertices = tuple(poly.vertices)
+            return min(vertices[index:] + vertices[:index] for index in range(len(vertices)))
+
+        validation = topology.validate_strict_topology(obj, expected_obj)
+        # BMesh's sphere builder may reorder whole polygons on successive runs.
+        # Connectivity and winding still have to match at every vertex index.
+        same_faces = {face_key(poly) for poly in mesh.polygons} == {face_key(poly) for poly in expected_mesh.polygons}
+        if not (validation["edge_connectivity_match"] and validation["polygon_count_match"] and same_faces):
+            return "This mesh's topology changed after creation; primitive history cannot safely rebuild it"
+        if any((vertex.co - other.co).length > 1e-5 for vertex, other in zip(mesh.vertices, expected_mesh.vertices)):
+            return "This mesh has edited vertex positions; primitive history would overwrite them. Use transforms instead"
+        def uv_signature(source):
+            return {layer.name: sorted((face_key(poly), source.loops[index].vertex_index,
+                                       tuple(round(float(value), 5) for value in layer.data[index].uv))
+                                      for poly in source.polygons for index in poly.loop_indices)
+                    for layer in source.uv_layers}
+
+        before_uvs = uv_signature(mesh)
+        expected_uvs = uv_signature(expected_mesh)
+        if before_uvs != expected_uvs:
+            return "This mesh has custom UVs; primitive history cannot regenerate them. Use transforms instead"
+        baseline_attrs = {attr.name for attr in expected_mesh.attributes}
+        extra_attrs = {attr.name for attr in mesh.attributes} - baseline_attrs
+        extra_attrs = {name for name in extra_attrs if not name.startswith(".select_")}
+        if extra_attrs:
+            return "Primitive history cannot preserve custom mesh attributes: " + ", ".join(sorted(extra_attrs))
+    finally:
+        if baseline is not None:
+            baseline.free()
+        bpy.data.objects.remove(expected_obj)
+        bpy.data.meshes.remove(expected_mesh)
+    return None
+
+
 def set_object_input_attribute(
     obj: Any,
     node_name: str,
@@ -679,27 +745,46 @@ def set_object_input_attribute(
             params = dict(meta.get("params", {}))
             if attr_name not in params:
                 return {"ok": False, "error": f"Unknown input attribute '{attr_name}' on {node_name}"}
-            if attr_name.startswith("subdivisions"):
-                params[attr_name] = max(1, min(128, int(round(float(value)))))
-            else:
-                params[attr_name] = max(0.001, float(value))
-            meta["params"] = params
-            obj[_INPUT_META_KEY] = json.dumps(meta)
+            try:
+                numeric_value = float(value)
+                if not math.isfinite(numeric_value):
+                    raise ValueError("Input values must be finite")
+                if attr_name.startswith("subdivisions"):
+                    ptype = str(meta.get("prim_type", "CUBE")).upper()
+                    minimum = 3 if ptype == "SPHERE" or (ptype == "CYLINDER" and attr_name == "subdivisions_x") else 1
+                    maximum = 64 if ptype == "CUBE" or (ptype == "CYLINDER" and attr_name == "subdivisions_y") else 128
+                    if ptype == "CYLINDER" and attr_name == "subdivisions_z":
+                        maximum = 1
+                    params[attr_name] = max(minimum, min(maximum, int(round(numeric_value))))
+                else:
+                    params[attr_name] = max(0.001, numeric_value)
+            except (ValueError, TypeError, OverflowError):
+                return {"ok": False, "error": f"Enter a valid number for {attr_name}"}
+            if params == meta.get("params", {}):
+                return {"ok": True, "kind": "primitive", "value": params[attr_name], "unchanged": True}
+            protection_error = _primitive_regeneration_error(obj, meta)
+            if protection_error:
+                return {"ok": False, "error": protection_error, "protected": True}
 
-            # Regenerate base mesh non-destructively while preserving material slots
+            # Only validated source primitives reach this rebuild.
             me = obj.data
             saved_mats = [m for m in me.materials]
+            smooth = bool(me.polygons and me.polygons[0].use_smooth)
             if getattr(me, "is_editmode", False):
                 import bmesh
 
                 bm_edit = bmesh.from_edit_mesh(me)
-                bm_edit.clear()
                 bm_new = _build_primitive_bmesh(meta.get("prim_type", "CUBE"), params)
-                for v in bm_new.verts:
-                    bm_edit.verts.new(v.co)
-                bm_edit.verts.ensure_lookup_table()
-                for f in bm_new.faces:
-                    bm_edit.faces.new([bm_edit.verts[v.index] for v in f.verts])
+                bm_edit.clear()
+                vertices = {v: bm_edit.verts.new(v.co) for v in bm_new.verts}
+                uv_pairs = [(layer, bm_edit.loops.layers.uv.get(layer.name) or bm_edit.loops.layers.uv.new(layer.name))
+                            for layer in bm_new.loops.layers.uv.values()]
+                for face in bm_new.faces:
+                    new_face = bm_edit.faces.new([vertices[v] for v in face.verts])
+                    new_face.smooth = smooth
+                    for source_loop, target_loop in zip(face.loops, new_face.loops):
+                        for source_layer, target_layer in uv_pairs:
+                            target_loop[target_layer].uv = source_loop[source_layer].uv
                 bm_new.free()
                 bmesh.update_edit_mesh(me)
             else:
@@ -707,10 +792,14 @@ def set_object_input_attribute(
                 bm.to_mesh(me)
                 bm.free()
                 me.update()
+                for poly in me.polygons:
+                    poly.use_smooth = smooth
             if not me.materials and saved_mats:
                 for m in saved_mats:
                     me.materials.append(m)
             obj.update_tag()
+            meta["params"] = params
+            obj[_INPUT_META_KEY] = json.dumps(meta)
             return {
                 "ok": True,
                 "kind": "primitive",
@@ -731,13 +820,23 @@ def set_object_input_attribute(
                 sname = str(getattr(item, "name", ""))
                 if attr_name in (ident, sname):
                     stype = str(getattr(item, "socket_type", ""))
+                    current = _get_gn_socket_value(mod, ident, getattr(item, 'default_value', None))
+                    if _numeric_socket_type(item, current) is None:
+                        return {'ok': False, 'error': 'Edit this socket in the native Geometry Nodes editor'}
+                    try:
+                        numeric_value = float(value)
+                        if not math.isfinite(numeric_value):
+                            raise ValueError('Input values must be finite')
+                    except (ValueError, TypeError, OverflowError):
+                        return {'ok': False, 'error': f'Enter a finite number for {sname}'}
                     if "Int" in stype:
-                        new_val = int(round(float(value)))
+                        new_val = int(round(numeric_value))
                     elif "Bool" in stype:
-                        new_val = bool(int(round(float(value))))
+                        new_val = bool(int(round(numeric_value)))
                     else:
-                        new_val = float(value)
-                    _set_gn_socket_value(mod, ident, new_val)
+                        new_val = numeric_value
+                    if not _set_gn_socket_value(mod, ident, new_val):
+                        return {'ok': False, 'error': f'Could not set {sname} on this modifier'}
                     obj.update_tag()
                     return {
                         "ok": True,
@@ -753,6 +852,8 @@ def set_object_input_attribute(
         attr_specs = dict((a, t) for a, _, t in MODIFIER_EXPOSED_ATTRS.get(mtype, ()))
         atype = attr_specs.get(attr_name, "float")
         try:
+            if not math.isfinite(float(value)):
+                return {'ok': False, 'error': f'Enter a finite number for {attr_name}'}
             if atype == "int" or isinstance(getattr(mod, attr_name), int):
                 new_val = max(0, int(round(float(value))))
                 setattr(mod, attr_name, new_val)
@@ -1089,7 +1190,14 @@ def sync_all_display_layers_from_scene() -> List[Dict[str, Any]]:
 # --------------------------------------------------------------------------------------
 
 _selected_input_target: Optional[Tuple[str, str]] = None  # (node_name, attr_name)
+_selected_input_owner: Optional[str] = None
 _explicit_selected_channels: List[str] = []
+
+
+def clear_input_scrub_target() -> None:
+    global _selected_input_target, _selected_input_owner
+    _selected_input_target = None
+    _selected_input_owner = None
 
 
 def _get_table_selected_descriptors(tbl: Any, slots: Any) -> List[Dict[str, Any]]:
@@ -1129,6 +1237,7 @@ def select_channels_in_ui(channel_names: List[str]) -> List[str]:
     from qtpy import QtCore
 
     _explicit_selected_channels = [str(n).strip() for n in channel_names if str(n).strip()]
+    clear_input_scrub_target()
     widget, slots = desktop.get_panel_widget_and_slots("channels")
     if widget is None or slots is None:
         return list(_explicit_selected_channels)
@@ -1176,68 +1285,134 @@ def get_selected_channel_names() -> List[str]:
     return [d["name"] for d in descriptors]
 
 
-def scrub_selected_channels(delta: float, objects: Optional[List[Any]] = None) -> Dict[str, Any]:
-    """Scrub highlighted Channel Box channels (or selected `INPUTS` attribute) across all selected objects."""
+class ChannelScrubSession:
+    """Bind one native viewport drag to exact, unrounded channel baselines."""
+
+    def __init__(self, entries, mode, objects):
+        import bpy
+        self.entries, self.mode, self.objects = entries, mode, objects
+        self.delta = 0.0
+        self.selection = {o.as_pointer() for o in bpy.context.selected_objects}
+        active = bpy.context.view_layer.objects.active
+        self.active = active.as_pointer() if active else 0
+
+    def valid(self):
+        import bpy
+        try:
+            active = bpy.context.view_layer.objects.active
+            return (self.selection == {o.as_pointer() for o in bpy.context.selected_objects}
+                    and self.active == (active.as_pointer() if active else 0)
+                    and all(o.name in bpy.data.objects for o in self.objects))
+        except ReferenceError:
+            return False
+
+    def apply(self, delta):
+        if not self.valid():
+            return False
+        self.delta += delta
+        for entry in self.entries:
+            value = entry['initial'] + self.delta * entry.get('scale', 1.0)
+            if entry['type'] == 'int':
+                value = int(round(value))
+            result = entry['write'](value)
+            if isinstance(result, dict) and not result.get('ok', False):
+                from .desktop import set_command_feedback
+                set_command_feedback('Scrub Input', result.get('error', 'Input cannot be changed'), 'WARNING')
+                return False
+        from . import desktop
+        desktop.sync_channels_now()
+        refresh_channel_box_extensions()
+        return True
+
+    def changed(self):
+        return any(entry['read']() != entry['initial'] for entry in self.entries)
+
+    def restore(self):
+        for entry in self.entries:
+            try:
+                entry.get('restore', entry['write'])(entry['initial'])
+            except (ReferenceError, RuntimeError, KeyError, AttributeError):
+                pass  # A removed target cannot be restored into another object.
+        from . import desktop
+        desktop.sync_channels_now()
+        refresh_channel_box_extensions()
+
+
+def begin_channel_scrub(objects: Optional[List[Any]] = None):
+    """Capture the actual INPUTS or highlighted channels once, before preview."""
     import bpy
     from . import desktop
-
-    # 1. If an INPUTS row is actively selected for scrubbing, scrub it first
     if _selected_input_target is not None:
         node_name, attr_name = _selected_input_target
         active = getattr(bpy.context.view_layer.objects, "active", None)
-        if active is not None:
+        if active is not None and active.name == _selected_input_owner:
             for node in get_object_inputs(active):
                 if node["node_name"] == node_name:
                     for attr in node["attributes"]:
-                        if attr["name"] == attr_name:
-                            cur_val = float(attr["value"])
-                            step = round(delta) if attr["type"] == "int" else delta
-                            res = set_object_input_attribute(active, node_name, attr_name, cur_val + step)
-                            refresh_channel_box_extensions()
-                            return {"ok": res.get("ok", False), "mode": "INPUTS", "result": res}
-
-    # 2. Check selected transform/custom channels in the Channel Box
+                        if attr["name"] != attr_name:
+                            continue
+                        if not attr.get('editable'):
+                            return None
+                        write = lambda value: set_object_input_attribute(active, node_name, attr_name, value)
+                        if node['kind'] == 'primitive':
+                            metadata = str(active[_INPUT_META_KEY])
+                            read = lambda: json.loads(str(active[_INPUT_META_KEY]))['params'][attr_name]
+                            def restore(value):
+                                result = write(value)
+                                if result.get('ok'):
+                                    active[_INPUT_META_KEY] = metadata
+                            entry = dict(read=read, write=write, restore=restore, initial=read(), type=attr['type'])
+                        else:
+                            mod = active.modifiers.get(node_name.removeprefix('MOD:'))
+                            if mod is None:
+                                return None
+                            if mod.type == 'NODES':
+                                read = lambda: _get_gn_socket_value(mod, attr_name, None)
+                                def restore(value):
+                                    _set_gn_socket_value(mod, attr_name, value);active.update_tag()
+                                entry = dict(read=read, write=write, restore=restore, initial=read(), type=attr['type'])
+                            else:
+                                read = lambda: getattr(mod, attr_name)
+                                def restore(value):
+                                    setattr(mod, attr_name, value);active.update_tag()
+                                scale = math.pi / 180 if attr['type'] == 'angle' else 1.0
+                                entry = dict(read=read, write=lambda value:write(value / scale), restore=restore,
+                                             initial=read(), type=attr['type'], scale=scale)
+                        return ChannelScrubSession([entry], 'INPUTS', [active])
+        clear_input_scrub_target()
+        return None
     widget, slots = desktop.get_panel_widget_and_slots("channels")
     if widget is None or slots is None:
-        return {"ok": False, "scrubbed_channels": [], "object_count": 0}
-
+        return None
     tbl = getattr(widget, "tbl000", None)
     if tbl is None:
-        return {"ok": False, "scrubbed_channels": [], "object_count": 0}
-
+        return None
     descriptors = _get_table_selected_descriptors(tbl, slots)
-    if not descriptors:
-        return {"ok": False, "scrubbed_channels": [], "object_count": 0}
-
     targets = objects if objects is not None else slots.controller.get_selected_nodes()
     targets = [o for o in targets if not is_datablock_linked(o)]
-    if not targets:
-        return {"ok": False, "scrubbed_channels": [], "object_count": 0}
-
-    scrubbed_names: List[str] = []
+    entries = []
     for d in descriptors:
-        cname = d["name"]
-        scrubbed_names.append(cname)
         for obj in targets:
             if slots.controller.is_locked(obj, d):
                 continue
-            cur = slots._scrub_value(obj, d)
-            if cur is None:
+            initial = slots.controller.get_channel_value(obj, d)
+            if not isinstance(initial, (int, float)) or isinstance(initial, bool) or not math.isfinite(initial):
                 continue
-            if d.get("type") == "int":
-                new_val = int(round(cur + delta))
-            else:
-                new_val = float(cur + delta)
-            slots.controller.set_channel_value([obj], d, str(new_val))
+            def write(value, obj=obj, descriptor=dict(d)):
+                from .channel_history import native_preview
+                with native_preview():
+                    slots.controller.set_channel_value([obj], descriptor, str(value))
+            entries.append(dict(initial=initial, type=d.get('type'), write=write,
+                read=lambda obj=obj, descriptor=dict(d):slots.controller.get_channel_value(obj, descriptor)))
+    return ChannelScrubSession(entries, 'CHANNELS', targets) if entries else None
 
-    desktop.sync_channels_now()
-    refresh_channel_box_extensions()
-    return {
-        "ok": True,
-        "mode": "CHANNELS",
-        "scrubbed_channels": scrubbed_names,
-        "object_count": len(targets),
-    }
+
+def scrub_selected_channels(delta: float, objects: Optional[List[Any]] = None) -> Dict[str, Any]:
+    """One-shot scrub; a native modal drag retains its captured session instead."""
+    session = begin_channel_scrub(objects)
+    return {'ok': bool(session and session.apply(delta)), 'mode': session.mode if session else None,
+            'object_count': len(session.objects) if session else 0,
+            'scrubbed_channels': get_selected_channel_names() if session and session.mode == 'CHANNELS' else []}
 
 
 # --------------------------------------------------------------------------------------
@@ -1252,6 +1427,7 @@ class MayaChannelBoxExtensionWidget:
 
         self.host = host_channels_widget
         self._updating = False
+        self._presented_object = None
 
         # Figma Make Channel Box Object Header Bar ("body_main_GEO" + "mesh transform")
         self.obj_header_bar = QtWidgets.QFrame()
@@ -1265,7 +1441,7 @@ class MayaChannelBoxExtensionWidget:
         self.lbl_obj_icon.setPixmap(icons.get_icon("dag_mesh", 14).pixmap(14, 14))
         oh_lay.addWidget(self.lbl_obj_icon)
 
-        self.lbl_obj_name = QtWidgets.QLabel("pCube1")
+        self.lbl_obj_name = style.elided_label("pCube1")
         self.lbl_obj_name.setStyleSheet(
             "color: #FFFFFF; font-size: 11px; font-weight: 700; background: transparent; border: none;"
         )
@@ -1274,7 +1450,7 @@ class MayaChannelBoxExtensionWidget:
 
         self.lbl_obj_subtitle = QtWidgets.QLabel("mesh transform")
         self.lbl_obj_subtitle.setStyleSheet(
-            "color: #7D8590; font-size: 9px; font-family: 'Cascadia Mono', 'Consolas', monospace; background: transparent; border: none;"
+            "color: #7D8590; font-size: 10px; font-family: 'Cascadia Mono', 'Consolas', monospace; background: transparent; border: none;"
         )
         oh_lay.addWidget(self.lbl_obj_subtitle)
 
@@ -1353,6 +1529,9 @@ class MayaChannelBoxExtensionWidget:
         self.tree_inputs.header().resizeSection(0, 145)
         self.tree_inputs.itemChanged.connect(self._on_input_item_edited)
         self.tree_inputs.itemSelectionChanged.connect(self._on_input_selection_changed)
+        channel_table = getattr(self.host, "tbl000", None)
+        if channel_table is not None:
+            channel_table.itemSelectionChanged.connect(self._on_transform_selection_changed)
         hlay.addWidget(self.tree_inputs, 1)
 
         self.splitter.addWidget(hist_pane)
@@ -1381,6 +1560,14 @@ class MayaChannelBoxExtensionWidget:
         self.btn_tab_display.setFixedHeight(18)
         self.btn_tab_display.clicked.connect(lambda: self.set_layer_editor_tab("DISPLAY"))
         lr_row.addWidget(self.btn_tab_display)
+
+        self.btn_tab_render = QtWidgets.QPushButton("Render")
+        self.btn_tab_render.setObjectName("MayaMaskPill")
+        self.btn_tab_render.setCheckable(True)
+        self.btn_tab_render.setFixedHeight(18)
+        self.btn_tab_render.setToolTip("Render layers = Blender view layers")
+        self.btn_tab_render.clicked.connect(lambda: self.set_layer_editor_tab("RENDER"))
+        lr_row.addWidget(self.btn_tab_render)
 
         self.btn_tab_anim = QtWidgets.QPushButton("Anim")
         self.btn_tab_anim.setObjectName("MayaMaskPill")
@@ -1412,6 +1599,27 @@ class MayaChannelBoxExtensionWidget:
         lr_row.addWidget(self.btn_del_layer)
         llay.addWidget(layer_hdr)
 
+        # Maya Layer Editor menus: Layers / Options / Help
+        from . import menus
+
+        layer_menubar = QtWidgets.QMenuBar()
+        layer_menubar.setObjectName("MayaPanelMenuBar")
+        layer_menubar.setNativeMenuBar(False)
+        menus.build_qmenu(layer_menubar.addMenu("Layers"), [
+            menus.F("Create Layer from Selected", self._on_new_layer_clicked),
+            menus.F("Add Selected to Layer", self._on_assign_layer_clicked),
+            menus.F("Delete Layer", self._on_delete_layer_clicked),
+        ])
+        menus.build_qmenu(layer_menubar.addMenu("Options"), [
+            menus.F("Display Layers", lambda: self.set_layer_editor_tab("DISPLAY")),
+            menus.F("Render Layers (View Layers)", lambda: self.set_layer_editor_tab("RENDER")),
+            menus.F("Animation Layers", lambda: self.set_layer_editor_tab("ANIM")),
+        ])
+        menus.build_qmenu(layer_menubar.addMenu("Help"), [
+            menus.O("View Layers (Blender Manual)", "wm.url_open", url="https://docs.blender.org/manual/en/latest/scene_layout/view_layers/introduction.html"),
+        ])
+        llay.addWidget(layer_menubar)
+
         self.layer_stack = QtWidgets.QStackedWidget()
         llay.addWidget(self.layer_stack, 1)
 
@@ -1423,7 +1631,7 @@ class MayaChannelBoxExtensionWidget:
         self.tbl_layers.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.tbl_layers.horizontalHeader().resizeSection(0, 24)
         self.tbl_layers.horizontalHeader().resizeSection(1, 24)
-        self.tbl_layers.horizontalHeader().resizeSection(2, 34)
+        self.tbl_layers.horizontalHeader().resizeSection(2, 44)
         self.tbl_layers.horizontalHeader().resizeSection(4, 28)
         self.tbl_layers.horizontalHeader().setStretchLastSection(False)
         from qtpy.QtWidgets import QHeaderView
@@ -1448,23 +1656,38 @@ class MayaChannelBoxExtensionWidget:
         self.tbl_anim_layers.cellClicked.connect(self._on_anim_layer_cell_clicked)
         self.layer_stack.addWidget(self.tbl_anim_layers)
 
+        # Page 2: Maya Render Layers = Blender view layers (R = use for rendering | Layer | Active)
+        self.tbl_render_layers = QtWidgets.QTableWidget(0, 3)
+        self.tbl_render_layers.setHorizontalHeaderLabels(["R", "Render Layer", ""])
+        self.tbl_render_layers.verticalHeader().setVisible(False)
+        self.tbl_render_layers.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.tbl_render_layers.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.tbl_render_layers.horizontalHeader().resizeSection(0, 24)
+        self.tbl_render_layers.horizontalHeader().resizeSection(2, 54)
+        self.tbl_render_layers.horizontalHeader().setStretchLastSection(False)
+        self.tbl_render_layers.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tbl_render_layers.cellClicked.connect(self._on_render_layer_cell_clicked)
+        self.layer_stack.addWidget(self.tbl_render_layers)
+
         self._active_layer_tab = "DISPLAY"
         self.splitter.addWidget(layer_pane)
         self.splitter.setSizes([185, 145])
 
     def set_layer_editor_tab(self, tab_mode: str) -> None:
         m = (tab_mode or "DISPLAY").upper()
-        self._active_layer_tab = "ANIM" if m == "ANIM" else "DISPLAY"
-        self.btn_tab_display.blockSignals(True)
-        self.btn_tab_anim.blockSignals(True)
-        self.btn_tab_display.setChecked(self._active_layer_tab == "DISPLAY")
-        self.btn_tab_anim.setChecked(self._active_layer_tab == "ANIM")
-        self.btn_tab_display.blockSignals(False)
-        self.btn_tab_anim.blockSignals(False)
+        self._active_layer_tab = m if m in ("ANIM", "RENDER") else "DISPLAY"
+        for btn, key in ((self.btn_tab_display, "DISPLAY"), (self.btn_tab_render, "RENDER"), (self.btn_tab_anim, "ANIM")):
+            btn.blockSignals(True)
+            btn.setChecked(self._active_layer_tab == key)
+            btn.blockSignals(False)
         if self._active_layer_tab == "ANIM":
             self.btn_new_layer.setText("+ Anim")
             self.btn_assign_layer.setText("Key")
             self.layer_stack.setCurrentIndex(1)
+        elif self._active_layer_tab == "RENDER":
+            self.btn_new_layer.setText("+ Layer")
+            self.btn_assign_layer.setText("Activate")
+            self.layer_stack.setCurrentIndex(2)
         else:
             self.btn_new_layer.setText("+ Layer")
             self.btn_assign_layer.setText("Assign")
@@ -1492,6 +1715,12 @@ class MayaChannelBoxExtensionWidget:
                 "rotation_x": "Rotate X",
                 "rotation_y": "Rotate Y",
                 "rotation_z": "Rotate Z",
+                "quaternion_w": "Quaternion W",
+                "quaternion_x": "Quaternion X",
+                "quaternion_y": "Quaternion Y",
+                "quaternion_z": "Quaternion Z",
+                "axis_angle": "Angle (deg)",
+                "axis_x": "Axis X", "axis_y": "Axis Y", "axis_z": "Axis Z",
                 "scale_x": "Scale X",
                 "scale_y": "Scale Y",
                 "scale_z": "Scale Z",
@@ -1587,10 +1816,34 @@ class MayaChannelBoxExtensionWidget:
             from qtpy import QtCore, QtGui, QtWidgets
             from .. import advanced
 
-            self._clamp_host_channel_table_height()
-
             active = getattr(bpy.context.view_layer.objects, "active", None) if bpy.context.view_layer else None
+            try:
+                previous_name=self._presented_object.name if self._presented_object is not None else None
+                same_target = active is not None and active == self._presented_object
+            except ReferenceError:
+                same_target=False
+            if not same_target:
+                clear_input_scrub_target()
+            # Rebuilding an open delegate destroys uncommitted text. A new object
+            # still replaces the editor, under the _updating commit guard.
+            if same_target and self.tree_inputs.state() == QtWidgets.QAbstractItemView.EditingState:
+                return
             sinfo = get_object_shape_info(active)
+            inputs = get_object_inputs(active)
+            layers = list_display_layers()
+            anim_lyrs = advanced.list_anim_layers(active) if active is not None else []
+            scene = bpy.context.scene
+            signature = repr((
+                active.as_pointer() if active else None, active.name if active else None,
+                sinfo, inputs, layers, anim_lyrs,
+                [(vl.name, vl.use) for vl in scene.view_layers], bpy.context.view_layer.name,
+            ))
+            if same_target and signature == getattr(self, "_presentation_signature", None):
+                self._presented_object=active
+                return
+            self._presented_object = active
+
+            self._clamp_host_channel_table_height()
 
             if active is not None:
                 self.lbl_obj_name.setText(active.name)
@@ -1607,14 +1860,17 @@ class MayaChannelBoxExtensionWidget:
                 f"{sinfo['shape_type']} (LINKED)" if sinfo["linked"] else str(sinfo["shape_type"])
             )
             self.txt_shape_name.blockSignals(True)
-            self.txt_shape_name.setText(sinfo["shape_name"] if sinfo["has_shape"] else "(None)")
+            if not (same_target and self.txt_shape_name.hasFocus()):
+                self.txt_shape_name.setText(sinfo["shape_name"] if sinfo["has_shape"] else "(None)")
             self.txt_shape_name.setReadOnly(not sinfo["editable"])
             self.txt_shape_name.blockSignals(False)
 
             # Populate INPUTS tree with Figma Make emerald active dot indicator
             self.tree_inputs.blockSignals(True)
+            expanded_nodes = {self.tree_inputs.topLevelItem(i).text(0): self.tree_inputs.topLevelItem(i).isExpanded()
+                              for i in range(self.tree_inputs.topLevelItemCount())} if same_target else {}
             self.tree_inputs.clear()
-            inputs = get_object_inputs(active)
+            scrub_item = None
             for node in inputs:
                 status_prefix = "● " if node.get("show_viewport", True) else "○ "
                 top = QtWidgets.QTreeWidgetItem([node["node_name"], f"{status_prefix}{node['node_type']}"])
@@ -1634,6 +1890,8 @@ class MayaChannelBoxExtensionWidget:
 
                 for attr in node["attributes"]:
                     child = QtWidgets.QTreeWidgetItem([attr["label"], str(attr["value"])])
+                    if attr.get('tip'):
+                        child.setToolTip(0, attr['tip']);child.setToolTip(1, attr['tip'])
                     child.setData(0, QtCore.Qt.UserRole, (node["node_name"], attr["name"]))
                     flags = QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
                     if attr.get("editable", True):
@@ -1642,11 +1900,16 @@ class MayaChannelBoxExtensionWidget:
                     child.setForeground(0, QtGui.QBrush(QtGui.QColor("#B8C2D0")))
                     child.setForeground(1, QtGui.QBrush(QtGui.QColor("#66C2F0")))
                     top.addChild(child)
-                top.setExpanded(True)
+                    if _selected_input_target == (node["node_name"], attr["name"]):
+                        scrub_item = child
+                top.setExpanded(expanded_nodes.get(node["node_name"], True))
+            if scrub_item is not None:
+                self.tree_inputs.setCurrentItem(scrub_item)
+            elif _selected_input_target is not None:
+                clear_input_scrub_target()
             self.tree_inputs.blockSignals(False)
 
             # Populate Display Layers table
-            layers = list_display_layers()
             self.tbl_layers.blockSignals(True)
             self.tbl_layers.setRowCount(len(layers))
             for r, lyr in enumerate(layers):
@@ -1681,8 +1944,9 @@ class MayaChannelBoxExtensionWidget:
                 self.tbl_layers.setRowHeight(r, 20)
             self.tbl_layers.blockSignals(False)
 
+            self._refresh_render_layers()
+
             # Populate Animation Layers table
-            anim_lyrs = advanced.list_anim_layers(active) if active is not None else []
             self.tbl_anim_layers.blockSignals(True)
             self.tbl_anim_layers.setRowCount(len(anim_lyrs))
             for r, alyr in enumerate(anim_lyrs):
@@ -1721,6 +1985,7 @@ class MayaChannelBoxExtensionWidget:
                 self.tbl_anim_layers.setItem(r, 5, wt_item)
                 self.tbl_anim_layers.setRowHeight(r, 20)
             self.tbl_anim_layers.blockSignals(False)
+            self._presentation_signature = signature
         except Exception:
             pass
         finally:
@@ -1732,23 +1997,52 @@ class MayaChannelBoxExtensionWidget:
         import bpy
 
         active = getattr(bpy.context.view_layer.objects, "active", None)
-        if active is not None:
-            rename_object_shape(active, self.txt_shape_name.text())
-            self.refresh()
+        if active is not None and active == self._presented_object:
+            from ..commands.scene_edits import commit
+            commit('Rename Shape',lambda:rename_object_shape(active,self.txt_shape_name.text()),lambda:active.data.name)
+        self._presentation_signature = None
+        self.refresh()
+
+    def _on_transform_selection_changed(self) -> None:
+        global _explicit_selected_channels
+        if self._updating:
+            return
+        _explicit_selected_channels = []
+        table = getattr(self.host, "tbl000", None)
+        if table is not None and table.selectedIndexes():
+            clear_input_scrub_target()
+            self.tree_inputs.clearSelection()
 
     def _on_input_selection_changed(self) -> None:
-        global _selected_input_target
+        global _selected_input_target, _selected_input_owner, _explicit_selected_channels
+        if self._updating:
+            return
         from qtpy import QtCore
 
         items = self.tree_inputs.selectedItems()
         if not items:
-            _selected_input_target = None
+            clear_input_scrub_target()
             return
         meta = items[0].data(0, QtCore.Qt.UserRole)
         if isinstance(meta, tuple) and len(meta) == 2:
+            try:
+                owner=self._presented_object.name if self._presented_object is not None else None
+            except ReferenceError:
+                clear_input_scrub_target()
+                QtCore.QTimer.singleShot(0,self.refresh)
+                return
             _selected_input_target = (str(meta[0]), str(meta[1]))
+            _selected_input_owner = owner
+            _explicit_selected_channels = []
+            table = getattr(self.host, "tbl000", None)
+            if table is not None:
+                blocked = table.blockSignals(True)
+                try:
+                    table.clearSelection()
+                finally:
+                    table.blockSignals(blocked)
         else:
-            _selected_input_target = None
+            clear_input_scrub_target()
 
     def _on_input_item_edited(self, item: Any, column: int) -> None:
         if self._updating or column != 1 or item is None:
@@ -1761,12 +2055,31 @@ class MayaChannelBoxExtensionWidget:
             return
         node_name, attr_name = meta
         active = getattr(bpy.context.view_layer.objects, "active", None)
-        if active is not None:
-            set_object_input_attribute(active, str(node_name), str(attr_name), item.text(1))
-            self.refresh()
+        result = {"ok": False, "error": "Selection changed; the pending input edit was discarded"}
+        if active is not None and active == self._presented_object:
+            try:
+                from ..commands.scene_edits import commit
+                from .modifier_stack import _history_state
+                result = commit('Input '+str(attr_name),
+                    lambda:set_object_input_attribute(active,str(node_name),str(attr_name),item.text(1)),
+                    lambda:(_history_state(active),str(active.get(_INPUT_META_KEY,''))))
+            except (ValueError, TypeError) as exc:
+                result = {"ok": False, "error": str(exc)}
+        if not result.get("ok"):
+            from . import desktop
+
+            desktop.set_command_feedback(f"inputs.{node_name}.{attr_name}", result.get("error", "Edit rejected"), level="WARNING")
+        # Read back clamped/rejected values even when the scene did not change.
+        self._presentation_signature = None
+        QtCore.QTimer.singleShot(0, self.refresh)
 
     def _on_add_geonodes_clicked(self) -> None:
-        ensure_procedural_geonodes_modifier()
+        from ..commands.scene_edits import commit
+        import bpy
+        from .modifier_stack import _history_state
+        active=bpy.context.view_layer.objects.active
+        if active is not None:
+            commit('Add Geometry Nodes',lambda:ensure_procedural_geonodes_modifier(active),lambda:_history_state(active))
         self.refresh()
 
     def _on_delete_history_clicked(self) -> None:
@@ -1778,7 +2091,52 @@ class MayaChannelBoxExtensionWidget:
             delete_construction_history()
         self.refresh()
 
+    def _refresh_render_layers(self) -> None:
+        import bpy
+        from qtpy import QtCore, QtGui, QtWidgets
+
+        scene = bpy.context.scene
+        win = bpy.context.window
+        active_name = win.view_layer.name if win is not None and win.view_layer is not None else ""
+        vls = list(scene.view_layers) if scene is not None else []
+        self.tbl_render_layers.blockSignals(True)
+        self.tbl_render_layers.setRowCount(len(vls))
+        for r, vl in enumerate(vls):
+            use_item = QtWidgets.QTableWidgetItem("R" if vl.use else "·")
+            use_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            use_item.setForeground(QtGui.QBrush(QtGui.QColor("#3FB950" if vl.use else "#555B66")))
+            use_item.setData(QtCore.Qt.UserRole, vl.name)
+            nm = QtWidgets.QTableWidgetItem(vl.name)
+            nm.setForeground(QtGui.QBrush(QtGui.QColor("#E6EDF3")))
+            act = QtWidgets.QTableWidgetItem("active" if vl.name == active_name else "")
+            act.setForeground(QtGui.QBrush(QtGui.QColor("#69B8DC")))
+            self.tbl_render_layers.setItem(r, 0, use_item)
+            self.tbl_render_layers.setItem(r, 1, nm)
+            self.tbl_render_layers.setItem(r, 2, act)
+            self.tbl_render_layers.setRowHeight(r, 22)
+        self.tbl_render_layers.blockSignals(False)
+
+    def _render_layer_at(self, row: int):
+        import bpy
+        from qtpy import QtCore
+
+        item = self.tbl_render_layers.item(max(0, row), 0)
+        name = str(item.data(QtCore.Qt.UserRole) or "") if item is not None else ""
+        return bpy.context.scene.view_layers.get(name) if name else None
+
+    def _on_render_layer_cell_clicked(self, row: int, col: int) -> None:
+        vl = self._render_layer_at(row)
+        if vl is not None and col == 0:
+            vl.use = not vl.use
+        self.refresh()
+
     def _on_new_layer_clicked(self) -> None:
+        if self._active_layer_tab == "RENDER":
+            import bpy
+
+            bpy.context.scene.view_layers.new(name="renderLayer1")
+            self.refresh()
+            return
         if self._active_layer_tab == "ANIM":
             from .. import advanced
 
@@ -1791,6 +2149,14 @@ class MayaChannelBoxExtensionWidget:
     def _on_assign_layer_clicked(self) -> None:
         from qtpy import QtCore
 
+        if self._active_layer_tab == "RENDER":
+            import bpy
+
+            vl = self._render_layer_at(self.tbl_render_layers.currentRow())
+            if vl is not None and bpy.context.window is not None:
+                bpy.context.window.view_layer = vl
+            self.refresh()
+            return
         if self._active_layer_tab == "ANIM":
             from .. import advanced
 
@@ -1815,6 +2181,15 @@ class MayaChannelBoxExtensionWidget:
     def _on_delete_layer_clicked(self) -> None:
         from qtpy import QtCore
 
+        if self._active_layer_tab == "RENDER":
+            import bpy
+
+            vl = self._render_layer_at(self.tbl_render_layers.currentRow())
+            scene = bpy.context.scene
+            if vl is not None and len(scene.view_layers) > 1:
+                scene.view_layers.remove(vl)
+            self.refresh()
+            return
         if self._active_layer_tab == "ANIM":
             from .. import advanced
 
@@ -1892,7 +2267,6 @@ def ensure_channel_box_extensions(channels_widget: Any) -> Optional[MayaChannelB
     if channels_widget is None:
         return None
     if _channel_box_ext_instance is not None and _channel_box_ext_instance.host is channels_widget:
-        style.apply_studio_style(channels_widget)
         _channel_box_ext_instance.refresh()
         return _channel_box_ext_instance
 
@@ -1922,8 +2296,8 @@ def refresh_channel_box_extensions() -> None:
 
 
 def teardown_channel_box_extensions() -> None:
-    global _channel_box_ext_instance, _selected_input_target
-    _selected_input_target = None
+    global _channel_box_ext_instance
+    clear_input_scrub_target()
     if _channel_box_ext_instance is not None:
         try:
             if getattr(_channel_box_ext_instance, "obj_header_bar", None) is not None:

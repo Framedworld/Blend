@@ -85,7 +85,7 @@ SHADOWED_SHORTCUT_MAP: Tuple[Dict[str, str], ...] = (
         "maya_action": "Move (W) / Rotate (E) / Scale (R) Persistent Manipulators",
         "shadowed_blender_action": "Context Menu (W) / Extrude (E) / Rotate (R)",
         "fallback_chord": "Ctrl+E (Extrude)  |  Shift+RMB (Modeling Tool Marking Menu)  |  HYBRID Profile (G/R/S)",
-        "fallback_operator": "landfall.extrude",
+        "fallback_operator": "landfall_studio.maya_extrude",
         "keymap": "Mesh",
     },
     {
@@ -293,6 +293,7 @@ def _apply_eevee_hardware_settings(scene: Any, spaces: List[Any]) -> None:
                 ("use_shadows", _eevee_shadows_enabled),
                 ("use_raytracing", _eevee_raytracing_enabled),
                 ("use_gtao", _eevee_ssao_enabled),
+                ("use_fast_gi", _eevee_ssao_enabled),
                 ("taa_samples", 16),
             ):
                 if hasattr(eevee, attr):
@@ -300,6 +301,8 @@ def _apply_eevee_hardware_settings(scene: Any, spaces: List[Any]) -> None:
                         setattr(eevee, attr, val)
                     except Exception:
                         pass
+            if _eevee_ssao_enabled and hasattr(eevee, "fast_gi_method"):
+                eevee.fast_gi_method = "AMBIENT_OCCLUSION_ONLY"
     for sp in spaces:
         shading = getattr(sp, "shading", None)
         if shading is not None:
@@ -355,6 +358,15 @@ def get_viewport_shading_state(context=None) -> Dict[str, Any]:
     else:
         renderer_label = "Viewport 2.0 (EEVEE)"
 
+    eevee = getattr(scene, "eevee", None) if scene is not None else None
+    if shading is not None and bl_type in {"SOLID", "WIREFRAME"}:
+        ao_actual = bool(shading.show_cavity)
+        shadows_actual = bool(shading.show_shadows)
+    else:
+        ao_actual = bool(getattr(eevee, "use_gtao", False)) if hasattr(eevee, "use_gtao") else bool(
+            getattr(eevee, "use_fast_gi", False) and getattr(eevee, "use_raytracing", False))
+        shadows_actual = bool(getattr(eevee, "use_shadows", _eevee_shadows_enabled))
+
     return {
         "ok": True,
         "maya_mode": _active_maya_shading_mode,
@@ -367,10 +379,11 @@ def get_viewport_shading_state(context=None) -> Dict[str, Any]:
         "wire_on_shaded": wire_over,
         "xray": xray,
         "isolated": isolated,
-        "eevee_ssao": _eevee_ssao_enabled,
-        "eevee_shadows": _eevee_shadows_enabled,
-        "eevee_raytracing": _eevee_raytracing_enabled,
-        "eevee_msaa": 16,
+        "eevee_ssao": ao_actual,
+        "eevee_shadows": shadows_actual,
+        "eevee_raytracing": bool(getattr(eevee, "use_raytracing", _eevee_raytracing_enabled)),
+        "eevee_msaa": int(getattr(eevee, "taa_samples", 16)),  # legacy key; EEVEE uses temporal sampling
+        "eevee_samples": int(getattr(eevee, "taa_samples", 16)),
     }
 
 
@@ -405,12 +418,17 @@ def toggle_viewport_20_feature(feature: str = "SSAO", enable: Optional[bool] = N
     scene = getattr(ctx, "scene", None) if ctx is not None else None
     spaces = _iter_view3d_spaces(ctx)
     norm = str(feature or "SSAO").strip().upper()
+    actual = get_viewport_shading_state(ctx)
     if norm in ("SSAO", "AO", "CAVITY"):
-        _eevee_ssao_enabled = (not _eevee_ssao_enabled) if enable is None else bool(enable)
+        _eevee_ssao_enabled = (not actual["eevee_ssao"]) if enable is None else bool(enable)
+        if _eevee_ssao_enabled:
+            _eevee_raytracing_enabled = True
     elif norm in ("SHADOWS", "SHADOW"):
-        _eevee_shadows_enabled = (not _eevee_shadows_enabled) if enable is None else bool(enable)
+        _eevee_shadows_enabled = (not actual["eevee_shadows"]) if enable is None else bool(enable)
     elif norm in ("RAYTRACING", "RAYTRACE", "SSR"):
-        _eevee_raytracing_enabled = (not _eevee_raytracing_enabled) if enable is None else bool(enable)
+        _eevee_raytracing_enabled = (not actual["eevee_raytracing"]) if enable is None else bool(enable)
+        if not _eevee_raytracing_enabled:
+            _eevee_ssao_enabled = False
     _apply_eevee_hardware_settings(scene, spaces)
     return get_viewport_shading_state(ctx)
 
@@ -537,6 +555,8 @@ def set_maya_viewport_shading(mode_key: str, context=None) -> Dict[str, Any]:
         for sp in spaces:
             if hasattr(sp, "shading"):
                 try:
+                    if target_val and sp.shading.type not in {"SOLID", "WIREFRAME"}:
+                        sp.shading.type = "SOLID"
                     sp.shading.show_xray = target_val
                     if hasattr(sp.shading, "show_xray_wireframe"):
                         sp.shading.show_xray_wireframe = target_val
@@ -811,9 +831,18 @@ def open_native_editor_or_mode(target: str, context=None) -> Dict[str, Any]:
 
     if norm == "UV_EDITOR":
         try:
-            bpy.ops.landfall_studio.component_mode(mode="UV")
-        except Exception:
-            pass
+            from ..ui import hybrid_window, menus
+
+            mode_result = menus.run_op("landfall_studio.component_mode", mode="UV")
+            if mode_result != {"FINISHED"}:
+                return {"ok": False, "target": norm, "error": "Select an editable mesh to open the UV Editor."}
+            result["editor_window"] = hybrid_window.open_editor_window("UV_EDITOR")
+            result["ok"] = bool(result["editor_window"].get("ok"))
+            result["editor_opened"] = result["ok"]
+            if not result["ok"]:
+                result["error"] = result["editor_window"].get("error", "Could not open UV Editor")
+        except Exception as exc:
+            return {"ok": False, "target": norm, "error": str(exc)}
         result["mode_after"] = getattr(ctx, "mode", "OBJECT")
         return result
 
@@ -838,8 +867,8 @@ def open_native_editor_or_mode(target: str, context=None) -> Dict[str, Any]:
                     break
         if active is not None and active.type == "MESH":
             try:
-                if ctx.mode != "SCULPT":
-                    bpy.ops.object.mode_set(mode="SCULPT")
+                from .. import sculpt
+                sculpt.enter(ctx)
             except Exception as exc:
                 return {"ok": False, "target": norm, "error": str(exc)}
         result["mode_after"] = getattr(ctx, "mode", "OBJECT")
@@ -847,7 +876,7 @@ def open_native_editor_or_mode(target: str, context=None) -> Dict[str, Any]:
             from ..ui import desktop, shelf
 
             shelf.refresh_top_shelf_status()
-            desktop.set_command_feedback("SculptModeBridge", f"Mode={result['mode_after']} (F=Brush Size)")
+            desktop.set_command_feedback("SculptModeBridge", f"ZBrush Sculpt Studio • {result['mode_after']}")
         except Exception:
             pass
         return result

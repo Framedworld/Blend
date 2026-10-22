@@ -3,7 +3,7 @@
 Tests and verifies every single one of the 10 Top-Severity issues and 16 Additional Findings:
 - Top-1: Blender Preferences & Theme persistence (`prefs.is_dirty` preserved, muted keymaps persisted/restored)
 - Top-2: Shape-key drivers preserved on timeline scrub / render when mesh has 2+ other shape keys
-- Top-3: Bevel/Extrude caddy adjustments preserve skin weights (`dvert`), shape keys, and extra UV sets
+- Top-3: Caddies guard shape-key topology and preserve weights and extra UV sets on a modeling copy
 - Top-4: "Save .ma" has a separate destination path field and refuses to overwrite imported source `.ma`
 - Top-5: Hold-D pivot snapping preserves non-basis shape keys and instanced mesh copies
 - Top-6: Pressing `6` or `7` preserves `CYCLES` render engine and scopes shading to active viewport
@@ -77,6 +77,7 @@ def run_all_26_verifications() -> None:
     # Register Landfall Studio
     landfall_studio.register()
     _assert(landfall_studio._studio_registered, "Studio failed to register")
+    desktop.ensure_ui_handler()  # Same authoritative Qt host for widget-data checks.
 
     # ------------------------------------------------------------------
     # [Top-1] Preferences & Theme Persistence (is_dirty == False, full restore)
@@ -141,23 +142,31 @@ def run_all_26_verifications() -> None:
     for p in caddy_obj.data.polygons:
         p.select = p.index == 0
 
+    source_coords=[tuple(v.co) for v in caddy_obj.data.vertices]
     c_res = modeling.invoke_modeling_caddy("EXTRUDE", caddy_obj, thickness=0.2)
+    _assert(not c_res['ok'] and c_res.get('guarded'),f'Top-3: Shape-key topology must be guarded: {c_res}')
+    _assert([tuple(v.co) for v in caddy_obj.data.vertices]==source_coords,'Top-3: Guarded source geometry changed')
+    _assert('MorphTarget' in caddy_obj.data.shape_keys.key_blocks,'Top-3: Guarded source lost shape keys')
+    model_copy=caddy_obj.copy();model_copy.data=caddy_obj.data.copy();bpy.context.collection.objects.link(model_copy)
+    model_copy.name='AuditCaddyModelingCopy';model_copy.shape_key_clear()
+    bpy.ops.object.select_all(action='DESELECT');model_copy.select_set(True);bpy.context.view_layer.objects.active=model_copy
+    c_res = modeling.invoke_modeling_caddy("EXTRUDE", model_copy, thickness=0.2)
     _assert(c_res["ok"], f"Top-3: invoke_modeling_caddy failed: {c_res}")
     s_res = modeling.scrub_caddy_parameter("thickness", delta_steps=2.0)
     _assert(s_res["ok"], f"Top-3: scrub_caddy_parameter failed: {s_res}")
     modeling.commit_or_close_caddy()
 
     _assert(
-        len(caddy_obj.data.uv_layers) == 2 and "LightmapUV" in caddy_obj.data.uv_layers,
+        len(model_copy.data.uv_layers) == 2 and "LightmapUV" in model_copy.data.uv_layers,
         f"Top-3: Extra UV set wiped by caddy scrub! UVs={list(caddy_obj.data.uv_layers.keys())}",
     )
     _assert(
         caddy_obj.data.shape_keys is not None and "MorphTarget" in caddy_obj.data.shape_keys.key_blocks,
         "Top-3: Shape keys wiped by caddy scrub!",
     )
-    has_weights = any(len(v.groups) > 0 for v in caddy_obj.data.vertices)
+    has_weights = any(len(v.groups) > 0 for v in model_copy.data.vertices)
     _assert(has_weights, "Top-3: Skin weights (dvert) wiped by caddy scrub!")
-    print("[PASS] Top-3: Caddy parameter scrubbing preserved skin weights, shape keys, and multiple UV sets")
+    print("[PASS] Top-3: Shape-key source guarded; modeling-copy caddy preserves weights and multiple UV sets")
 
     # ------------------------------------------------------------------
     # [Top-4] "Save .ma" Refuses to Overwrite Source .ma & Has Separate UI Field
@@ -516,11 +525,13 @@ def run_all_26_verifications() -> None:
     # ------------------------------------------------------------------
     # [#24] "Send to Maya" Button Uses dry_run=False
     # ------------------------------------------------------------------
-    send_src = inspect.getsource(w_ic._on_send_clicked)
-    _assert(
-        "dry_run=False" in send_src,
-        f"#24: _on_send_clicked still uses dry_run=True: {send_src}",
-    )
+    sends=[]
+    real_send=interchange.send_to_maya
+    try:
+        interchange.send_to_maya=lambda **kwargs:(sends.append(kwargs) or {'ok':True,'status':'MOCK_DELIVERY'})
+        w_ic._on_send_clicked()
+        _assert(len(sends)==1 and sends[0].get('dry_run') is False,f'#24: Send action did not request live delivery: {sends}')
+    finally:interchange.send_to_maya=real_send
     print("[PASS] #24: 'Send to Maya' button invokes live send (dry_run=False)")
 
     # ------------------------------------------------------------------

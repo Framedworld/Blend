@@ -150,6 +150,9 @@ def _return_os_focus_to_blender() -> None:
     if sys.platform != "win32":
         return
     try:
+        from PySide6 import QtWidgets
+        if QtWidgets.QApplication.activePopupWidget() is not None or QtWidgets.QApplication.activeModalWidget() is not None:return
+        if _installed_filter is not None and _installed_filter.sculpt_pointer.active:return
         import bpy
 
         if bpy.app.background:
@@ -176,12 +179,51 @@ def dispatch_qt_key_to_blender(
     from .. import keymaps
 
     Qt = QtCore.Qt
+    from .input_policy import keeps_keyboard
+    if keeps_keyboard(target_widget, key, modifiers):
+        return None
     ctrl = bool(modifiers & Qt.ControlModifier)
     shift = bool(modifiers & Qt.ShiftModifier)
     alt = bool(modifiers & Qt.AltModifier)
     meta = bool(modifiers & Qt.MetaModifier)
 
     profile = keymaps.get_active_profile()
+    if ctrl and not (alt or meta) and key in (Qt.Key_N,Qt.Key_O,Qt.Key_S,Qt.Key_Q):
+        from . import menus
+        from PySide6 import QtWidgets
+        paths={Qt.Key_N:('Ctrl+N','wm.read_homefile'),Qt.Key_O:('Ctrl+O','landfall.project_open'),
+               Qt.Key_S:('Ctrl+Shift+S' if shift else 'Ctrl+S','landfall.project_save_as' if shift else 'wm.save_mainfile'),
+               Qt.Key_Q:('Ctrl+Q','wm.quit_blender')}
+        label,path=paths[key]
+        focus=QtWidgets.QApplication.focusWidget()
+        if focus is not None:focus.clearFocus()  # Commit a pending numeric edit before saving.
+        result=menus.run_op(path,invoke=True)
+        return _record_passthrough(label,path,target_widget,isinstance(result,set) and bool(result & {'FINISHED','RUNNING_MODAL'}),'file_command')
+
+    # Sculpt has its own ZBrush Q/W/E/R meanings (E=Scale, R=Rotate).
+    # Reuse the same sculpt shortcut dispatcher used by the native keymap.
+    if bpy.context.mode == 'SCULPT':
+        from ..sculpt import state,is_engaged
+        if is_engaged():
+            action = None
+            if not (alt or meta):
+                if ctrl:
+                    action = {Qt.Key_D:'DIVIDE', Qt.Key_W:'GROUP', Qt.Key_Plus:'GROW', Qt.Key_Minus:'SHRINK', Qt.Key_Up:'CONTRAST_UP', Qt.Key_Down:'CONTRAST_DOWN'}.get(key)
+                elif shift:
+                    action = {Qt.Key_D:'LOWER',Qt.Key_F:'POLYFRAME',Qt.Key_Question:'K'}.get(key)
+                else:
+                    action = {Qt.Key_B:'PALETTE',Qt.Key_S:'draw_size',Qt.Key_U:'z_intensity',Qt.Key_O:'focal_shift',Qt.Key_I:'z_intensity',Qt.Key_D:'HIGHER',
+                              Qt.Key_Space:'QUICK',Qt.Key_Tab:'FOCUS_UI',
+                              **{getattr(Qt,'Key_'+x):x for x in ('Q','W','E','R','X','L','K','P','F')}}.get(key)
+            if action:
+                if is_editable_text_widget(target_widget):
+                    return _record_passthrough(str(key),action,target_widget,False,'editable_text_focus')
+                ok=_execute_in_view3d(lambda:bpy.ops.landfall_studio.sculpt_shortcut(action=action))
+                if action not in ('PALETTE','QUICK','draw_size','focal_shift','z_intensity'): _return_os_focus_to_blender()
+                return _record_passthrough(str(key),action,target_widget,ok,'sculpt_shortcut')
+            if not ctrl: return None
+        elif not ctrl:
+            return None
 
     # Map key + modifiers to (key_label, action_id, callable)
     key_label = None
@@ -190,7 +232,10 @@ def dispatch_qt_key_to_blender(
     focus_back = True
 
     if ctrl and not alt and not meta:
-        if key == Qt.Key_Z and not shift:
+        if key == Qt.Key_D and not shift and profile == 'MAYA' and bpy.context.mode == 'OBJECT':
+            key_label, action_id = 'Ctrl+D', 'landfall_studio.duplicate_objects'
+            op_fn = lambda: bpy.ops.landfall_studio.duplicate_objects('EXEC_DEFAULT', True, linked=False)
+        elif key == Qt.Key_Z and not shift:
             key_label = "Ctrl+Z"
             action_id = "ed.undo"
             op_fn = lambda: bpy.ops.ed.undo()
@@ -234,6 +279,16 @@ def dispatch_qt_key_to_blender(
                 key_label = k_str
                 action_id = f"landfall_studio.select_tool({tmode})"
                 op_fn = lambda t=tmode: bpy.ops.landfall_studio.select_tool(tool=t)
+            elif key in (Qt.Key_4, Qt.Key_5, Qt.Key_6, Qt.Key_7):
+                key_label = str(key - Qt.Key_0)
+                action_id = "landfall_studio.viewport_shading"
+                op_fn = lambda m=key_label: bpy.ops.landfall_studio.viewport_shading(mode=m)
+            elif key == Qt.Key_S:
+                key_label, action_id = "S", "landfall_studio.set_key"
+                op_fn = lambda: bpy.ops.landfall_studio.set_key()
+            elif key == Qt.Key_Z:
+                key_label, action_id = "Z", "ed.undo"
+                op_fn = lambda: bpy.ops.ed.undo()
             elif key in smooth_map:
                 k_str, smode = smooth_map[key]
                 key_label = k_str
@@ -256,7 +311,7 @@ def dispatch_qt_key_to_blender(
             elif key == Qt.Key_G:
                 key_label = "G"
                 action_id = "landfall_studio.repeat_last_command"
-                op_fn = lambda: bpy.ops.landfall_studio.repeat_last_command()
+                op_fn = lambda: bpy.ops.landfall_studio.repeat_last_command('EXEC_DEFAULT', True)
             elif key == Qt.Key_Y:
                 key_label = "Y"
                 action_id = "landfall_studio.select_last_tool"
@@ -278,6 +333,10 @@ def dispatch_qt_key_to_blender(
                     return {"CANCELLED"}
 
                 op_fn = _hotbox
+
+    if profile == "MAYA" and shift and not (ctrl or alt or meta) and key == Qt.Key_Z:
+        key_label, action_id = "Shift+Z", "ed.redo"
+        op_fn = lambda: bpy.ops.ed.redo()
 
     if op_fn is None or key_label is None or action_id is None:
         return None
@@ -318,13 +377,27 @@ def install_hotkey_filter() -> bool:
         return False
 
     if _installed_filter is not None:
-        try:
-            app.removeEventFilter(_installed_filter)
-        except Exception:
-            pass
+        uninstall_hotkey_filter()
 
     class QtViewportHotkeyFilter(QtCore.QObject):
         """Application-wide Qt event filter forwarding non-text viewport hotkeys to Blender."""
+
+        def __init__(self,parent):
+            super().__init__(parent)
+            self._keyboard_key=None
+            self._keyboard_owner=None
+            from .sculpt_input import PointerInput
+            self.sculpt_pointer=PointerInput()
+            from blendertk.ui_utils.qt_dock import QtDock
+            self._dock_predicate=QtDock._interaction_in_flight
+            self._pen_predicate=lambda:self.sculpt_pointer.active or self._dock_predicate()
+            QtDock._interaction_in_flight=staticmethod(self._pen_predicate)
+
+        def shutdown(self):
+            self.sculpt_pointer.shutdown()
+            from blendertk.ui_utils.qt_dock import QtDock
+            if QtDock._interaction_in_flight is self._pen_predicate:
+                QtDock._interaction_in_flight=staticmethod(self._dock_predicate)
 
         @property
         def passthrough_count(self) -> int:
@@ -347,10 +420,42 @@ def install_hotkey_filter() -> bool:
 
         def eventFilter(self, obj, event):
             try:
-                etype = event.type()
+                etype=event.type()
+                if etype in (QtCore.QEvent.KeyRelease,QtCore.QEvent.MouseButtonPress,
+                             QtCore.QEvent.TabletPress,QtCore.QEvent.ApplicationDeactivate,
+                             QtCore.QEvent.WindowDeactivate):
+                    self._keyboard_key=None;self._keyboard_owner=None
+                from ..commands.scene_edits import handle_input
+                if self.sculpt_pointer.handle(obj,event):
+                    handle_input(obj,event)
+                    return True
+                if handle_input(obj,event):return True
+                from .input_policy import handle_wheel, keeps_keyboard
+                if handle_wheel(obj,event):return True
+                if QtWidgets.QApplication.activePopupWidget() is not None:
+                    return False
+                if isinstance(obj, QtWidgets.QWidget) and obj.window().objectName() in ("StudioQtMarkingMenu", "ZBrushBrushPalette", "ZBrushCursorSlider", "SculptPicker", "SculptColorPicker"):
+                    return False
                 if etype == QtCore.QEvent.KeyPress and not event.isAutoRepeat():
+                    # Qt can propagate one unhandled edit key through each
+                    # parent while a foreign native host has no Qt focusWidget.
+                    # Keep its original text/picker ownership for this event;
+                    # a generic parent must not turn it into a scene command.
+                    # Qt/PySide can deliver distinct event wrappers to parents.
+                    # Retain the key's originating widget until release; only
+                    # its ancestor chain inherits that ownership. A later key
+                    # on a different button still reaches the scene normally.
+                    origin=self._keyboard_owner
+                    if self._keyboard_key==event.key() and origin is not None:
+                        try:
+                            if obj is origin or (isinstance(obj,QtWidgets.QWidget) and obj.isAncestorOf(origin)):return False
+                        except RuntimeError:pass  # The original editor was deleted.
+                    self._keyboard_key=None;self._keyboard_owner=None
                     # Ignore synthetic/duplicate deliveries on QWindow when QWidget will receive it
                     if isinstance(obj, QtWidgets.QWidget):
+                        if keeps_keyboard(obj,event.key(),event.modifiers()):
+                            self._keyboard_key=event.key();self._keyboard_owner=obj
+                            return False
                         rec = dispatch_qt_key_to_blender(
                             key=event.key(),
                             modifiers=event.modifiers(),
@@ -359,6 +464,8 @@ def install_hotkey_filter() -> bool:
                         if rec is not None and rec["forwarded"]:
                             event.accept()
                             return True
+                        if rec is not None and rec.get('reason')=='editable_text_focus':
+                            self._keyboard_key=event.key();self._keyboard_owner=obj
             except Exception:
                 pass
             return False
@@ -384,6 +491,8 @@ def uninstall_hotkey_filter() -> None:
         app = QtWidgets.QApplication.instance()
         if app is not None:
             app.removeEventFilter(_installed_filter)
+        _installed_filter.shutdown()
+        _installed_filter.deleteLater()
     except Exception:
         pass
     _installed_filter = None

@@ -27,6 +27,22 @@ _MAYAPY_BOOTSTRAP_DIR: Optional[str] = None
 _last_imported_source_path: Optional[str] = None
 
 
+def _bridge_result_error(result: Any, operation: str) -> Optional[str]:
+    """Reject upstream's handled failures before inspecting an existing artifact.
+
+    Both MayaBridge operations return a nonempty result dict on success and
+    ``None`` on handled failures. The save deliverer judges the produced artifact,
+    so its diagnostic return code alone is not a reliable success criterion.
+    """
+    if not isinstance(result, dict) or not result:
+        return f"MayaBridge.{operation} did not complete successfully; see Script Output for details."
+    if result.get("ok") is False or result.get("success") is False or result.get("error"):
+        return str(result.get("error") or f"MayaBridge.{operation} reported a failure.")
+    if str(result.get("status", "")).upper() in {"FAIL", "FAILED", "ERROR", "BLOCKED", "CANCELLED"}:
+        return f"MayaBridge.{operation} reported {result['status']}."
+    return None
+
+
 def ensure_mayapy_sitecustomize_env(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """Ensure headless `mayapy` has Maya's `bin` directory registered on the DLL search path while chaining any studio `sitecustomize.py`."""
     global _MAYAPY_BOOTSTRAP_DIR
@@ -221,6 +237,46 @@ os._exit(0)
     }
 
 
+def _native_ascii_import(preflight: Dict[str, Any], src_path: str, clear_existing: bool,
+                         reason: str) -> Dict[str, Any]:
+    """Import a .ma through the native reader when no Maya runtime can convert it."""
+    import bpy
+    from . import maya_ascii
+
+    originals = list(bpy.context.scene.objects) if clear_existing else []
+    result = maya_ascii.import_maya_ascii(src_path)
+    error = None if result.get("ok") else result.get("error", "Native Maya ASCII import failed.")
+    imported = [bpy.data.objects[n] for n in result.get("objects", []) if n in bpy.data.objects]
+    if not error and clear_existing:
+        for obj in originals:
+            # Objects also used by another scene are kept, as on the mayapy route.
+            if obj not in imported and all(sc == bpy.context.scene for sc in obj.users_scene):
+                try:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                except ReferenceError:
+                    pass
+    global _last_imported_source_path
+    if not error:
+        _last_imported_source_path = str(src_path)
+    sig = preflight_report.capture_blender_scene_signature(imported)
+    report = preflight_report.build_interchange_report(
+        operation="IMPORT_MAYA_SCENE",
+        source_path=str(src_path),
+        destination_path="<blender_scene>",
+        preflight=preflight,
+        result_signature=sig,
+        options={"route": "native_ascii", "reason": reason},
+        error=error,
+    )
+    report["imported_objects"] = [o.name for o in imported]
+    report["route"] = "native_ascii"
+    report["skipped"] = result.get("skipped", [])
+    report["route_note"] = (
+        "Imported with Studio's native Maya ASCII reader (geometry, hierarchy, UVs, hard edges). "
+        + reason)
+    return report
+
+
 def import_maya_scene(
     src_path: str,
     *,
@@ -247,6 +303,10 @@ def import_maya_scene(
         )
         return rep
 
+    is_ascii = str(preflight.get("source_path", src_path)).lower().endswith(".ma")
+    if preflight.get("status") == "BLOCKED" and is_ascii:
+        return _native_ascii_import(preflight, preflight.get("source_path", src_path), clear_existing,
+                                    "No working Maya runtime was available.")
     if preflight.get("status") == "BLOCKED":
         rep = preflight_report.build_interchange_report(
             operation="IMPORT_MAYA_SCENE",
@@ -259,34 +319,72 @@ def import_maya_scene(
         )
         return rep
 
-    if clear_existing:
-        for obj in list(bpy.data.objects):
-            try:
-                bpy.data.objects.remove(obj, do_unlink=True)
-            except Exception:
-                pass
-
+    # Conversion/import can fail even when mayapy was discovered. Keep the
+    # artist's existing scene until the importer has returned a valid result.
+    original_objs = list(bpy.context.scene.objects) if clear_existing else []
+    shared_originals = [
+        obj.name for obj in original_objs
+        if any(scene != bpy.context.scene for scene in getattr(obj, "users_scene", ()))
+    ]
+    if shared_originals:
+        report = preflight_report.build_interchange_report(
+            operation="IMPORT_MAYA_SCENE",
+            source_path=preflight["source_path"],
+            destination_path="<blender_scene>",
+            preflight=preflight,
+            result_signature={},
+            options={"via": via, "rig_mode": rig_mode, "clear_existing": True},
+            error=(
+                "Cannot clear the scene because these objects also belong to another scene: "
+                + ", ".join(shared_originals)
+                + ". Import without Clear Scene First or make the objects independent first."
+            ),
+        )
+        report["imported_objects"] = []
+        return report
     importer = MayaSceneImport()
     imported_objs = []
+    import_completed = False
     err_msg = None
     try:
-        imported_objs = importer.import_scene(
+        imported = importer.import_scene(
             preflight["source_path"],
             via=via,
             rig_mode=rig_mode,
             use_cache=use_cache,
             timeout=timeout,
             include_animation=True,
+            scene_settings=True if clear_existing else "auto",
         )
+        if imported is None:
+            raise RuntimeError("MayaSceneImport.import_scene did not return a completed import result.")
+        imported_objs = list(imported)
+        summary = preflight.get("summary", {})
+        if not imported_objs and any(summary.get(key, 0) for key in ("transforms", "meshes", "joints")):
+            raise RuntimeError("Maya scene contains objects, but the import created no objects; existing scene preserved.")
+        import_completed = True
     except Exception as exc:
         err_msg = str(exc)
 
-    global _last_imported_source_path
-    _last_imported_source_path = str(preflight["source_path"])
+    if import_completed and clear_existing:
+        cleanup_errors = []
+        for obj in original_objs:
+            if obj in imported_objs:
+                continue
+            try:
+                bpy.data.objects.remove(obj, do_unlink=True)
+            except ReferenceError:
+                continue
+            except Exception as exc:
+                cleanup_errors.append(str(exc))
+        if cleanup_errors:
+            err_msg = "Import completed, but clearing original objects failed: " + "; ".join(cleanup_errors)
 
-    sig = preflight_report.capture_blender_scene_signature(
-        imported_objs if imported_objs else None
-    )
+    global _last_imported_source_path
+    if import_completed:
+        _last_imported_source_path = str(preflight["source_path"])
+
+    sig = preflight_report.capture_blender_scene_signature(imported_objs)
     report = preflight_report.build_interchange_report(
         operation="IMPORT_MAYA_SCENE",
         source_path=preflight["source_path"],
@@ -297,6 +395,36 @@ def import_maya_scene(
         error=err_msg,
     )
     report["imported_objects"] = [getattr(o, "name", str(o)) for o in (imported_objs or [])]
+    if not import_completed and is_ascii:
+        # A detected Maya failed: report it as-is, and point at the native route.
+        report["hint"] = "File > Import > Maya ASCII (native) reads .ma geometry without a Maya runtime."
+    return report
+
+
+def _native_ascii_save(dst: Path, scope: str, reason: str) -> Dict[str, Any]:
+    """Write a .ma with Studio's native writer when no Maya runtime can convert."""
+    import bpy
+    from . import maya_ascii
+
+    if (scope or "ALL").upper() == "SELECTED" and getattr(bpy.context, "selected_objects", None):
+        objects = list(bpy.context.selected_objects)
+    else:
+        objects = list(bpy.context.scene.objects)
+    result = maya_ascii.export_maya_ascii(str(dst), objects)
+    written = preflight_report.preflight_maya_scene(str(dst))
+    report = preflight_report.build_interchange_report(
+        operation="SAVE_AS_MAYA_SCENE",
+        source_path=str(dst),
+        destination_path=str(dst),
+        preflight=written,
+        result_signature=preflight_report.capture_blender_scene_signature(objects),
+        options={"route": "native_ascii", "reason": reason},
+        error=None if result.get("ok") else result.get("error"),
+    )
+    report["written_path"] = str(dst)
+    report["route"] = "native_ascii"
+    report["route_note"] = ("Saved with Studio's native Maya ASCII writer (geometry, hierarchy, UVs, "
+                            "hard edges; no shaders, skinning or animation). " + reason)
     return report
 
 
@@ -335,6 +463,8 @@ def save_as_maya_scene(
             }
 
     runtime = preflight_report.get_maya_runtime_status()
+    if not runtime.get("available") and dst.suffix.lower() == ".ma":
+        return _native_ascii_save(dst, scope, "No working Maya runtime was available.")
     if not runtime.get("available"):
         return {
             "ok": False,
@@ -372,7 +502,13 @@ def save_as_maya_scene(
     err_msg = None
     try:
         res = bridge.save_as(str(dst), objects=export_objs, params=params)
-        written_path = str(getattr(res, "artifact", None) or res or dst)
+        err_msg = _bridge_result_error(res, "save_as")
+        if err_msg is None:
+            written_path = str(res.get("output") or "")
+            if not written_path:
+                err_msg = "MayaBridge.save_as did not return the output artifact for this conversion."
+            elif Path(written_path).resolve() != dst.resolve():
+                err_msg = f"MayaBridge.save_as returned an unexpected output path: {written_path}"
     except Exception as exc:
         err_msg = str(exc)
 
@@ -471,7 +607,21 @@ def send_to_maya(
             "render_context_keys": sorted(ctx.keys()),
         }
 
-    res = bridge.send(objects=objs, template="import", mode="send_to", params=params)
+    try:
+        res = bridge.send(objects=objs, template="import", mode="send_to", params=params)
+        err_msg = _bridge_result_error(res, "send")
+    except Exception as exc:
+        res = None
+        err_msg = str(exc)
+    if err_msg:
+        return {
+            "ok": False,
+            "status": "FAIL",
+            "operation": "SEND_TO_MAYA",
+            "maya_exe": bridge.maya_path,
+            "object_count": len(objs),
+            "error": err_msg,
+        }
     return {
         "ok": True,
         "status": "SENT",

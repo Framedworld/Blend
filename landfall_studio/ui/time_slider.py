@@ -16,6 +16,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import style
 
 _time_slider_instances: List[Any] = []
+
+# Maya Help Line text for the active tool
+TOOL_HELP_TEXT: Dict[str, str] = {
+    "SELECT": "Select Tool: select an object. Shift-click to add or remove, Ctrl-click to deselect. Hold B to resize the Soft Select falloff.",
+    "TRANSLATE": "Move Tool: drag the manipulator to move. MMB-drag moves along the active axis. Hold D to edit the pivot; hold X / C / V to snap.",
+    "ROTATE": "Rotate Tool: drag a ring to rotate around that axis. MMB-drag rotates around the active axis. Hold D to edit the pivot.",
+    "RESIZE": "Scale Tool: drag a handle to scale on that axis, or the center to scale uniformly. Hold D to edit the pivot.",
+}
 _bottom_time_slider_dock: Optional["BottomTimeSliderQtDock"] = None
 
 
@@ -85,6 +93,8 @@ class MayaTimeSliderController:
         style.apply_studio_style(self.root)
 
         self._build_ui()
+        for field in (self.spin_current,self.spin_start,self.spin_end):
+            field.setKeyboardTracking(False)
         if self not in _time_slider_instances:
             _time_slider_instances.append(self)
         self.refresh_from_scene()
@@ -149,7 +159,7 @@ class MayaTimeSliderController:
                 minor_step = max(1, major_step // 5)
 
                 font = p.font()
-                font.setPixelSize(9)
+                font.setPixelSize(10)
                 p.setFont(font)
 
                 # Draw minor & major frame ticks
@@ -205,6 +215,35 @@ class MayaTimeSliderController:
                 self.setFixedHeight(17)
                 self.frame_start = 1
                 self.frame_end = 100
+                self._drag = None
+                self.setCursor(QtCore.Qt.SizeHorCursor)
+
+            def mousePressEvent(self, event):
+                if event.button() != QtCore.Qt.LeftButton:
+                    return
+                x = event.position().x()
+                handle = "start" if x < 20 else ("end" if x > self.width()-20 else "range")
+                self._drag = (handle, x, self.frame_start, self.frame_end)
+
+            def mouseMoveEvent(self, event):
+                if self._drag is None or not event.buttons() & QtCore.Qt.LeftButton:
+                    return
+                handle, x, start, end = self._drag
+                delta = round((event.position().x()-x) * max(1, end-start) / max(1, self.width()-28))
+                new_start = min(end, start+delta) if handle == "start" else start
+                new_end = max(start, end+delta) if handle == "end" else end
+                if handle == "range":
+                    new_start, new_end = start+delta, end+delta
+                ctrl.spin_start.blockSignals(True)
+                ctrl.spin_end.blockSignals(True)
+                ctrl.spin_start.setValue(new_start)
+                ctrl.spin_end.setValue(new_end)
+                ctrl.spin_start.blockSignals(False)
+                ctrl.spin_end.blockSignals(False)
+                ctrl._on_range_spin_changed()
+
+            def mouseReleaseEvent(self, event):
+                self._drag = None
 
             def paintEvent(self, _event) -> None:
                 p = QtGui.QPainter(self)
@@ -223,13 +262,13 @@ class MayaTimeSliderController:
                 p.fillRect(max(16, w - 14), 4, 8, h - 8, QtGui.QColor("#69B8DC"))
 
                 font = p.font()
-                font.setPixelSize(9)
+                font.setPixelSize(10)
                 p.setFont(font)
                 p.setPen(QtGui.QColor("#9AA4B2"))
                 p.drawText(
                     bar_rect,
                     QtCore.Qt.AlignCenter,
-                    f"Playback Range: {self.frame_start}  —  {self.frame_end}   (Scene: 1 — 240)",
+                    f"Playback Range: {self.frame_start}  —  {self.frame_end}",
                 )
                 p.end()
 
@@ -312,7 +351,7 @@ class MayaTimeSliderController:
 
         lbl_rng = QtWidgets.QLabel("RANGE", self.root)
         lbl_rng.setFixedWidth(42)
-        lbl_rng.setStyleSheet("color: #7D8590; font-size: 9px; font-weight: 700; letter-spacing: 0.6px;")
+        lbl_rng.setStyleSheet("color: #7D8590; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
         row2.addWidget(lbl_rng)
 
         self.spin_start = QtWidgets.QSpinBox(self.root)
@@ -351,9 +390,10 @@ class MayaTimeSliderController:
         self.btn_cmd_lang = QtWidgets.QPushButton("PYTHON", self.root)
         self.btn_cmd_lang.setFixedSize(64, 19)
         self.btn_cmd_lang.setToolTip("Execute Python / Studio Command Expression")
+        self.btn_cmd_lang.clicked.connect(self._on_command_return_pressed)
         self.btn_cmd_lang.setStyleSheet(
             "background-color: #1A2836; color: #69B8DC; border: 1px solid #2B5B78; "
-            "border-radius: 2px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 9px; font-weight: 700;"
+            "border-radius: 2px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 10px; font-weight: 700;"
         )
         row3.addWidget(self.btn_cmd_lang)
 
@@ -365,7 +405,6 @@ class MayaTimeSliderController:
             "border-radius: 2px; padding: 0 6px; font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 10px;"
         )
         self.txt_command.returnPressed.connect(self._on_command_return_pressed)
-        self.btn_cmd_lang.clicked.connect(self._on_command_return_pressed)
         row3.addWidget(self.txt_command, 5)
 
         self.lbl_result = QtWidgets.QLabel("RESULT   // Landfall Studio — Modern Maya Desktop Ready", self.root)
@@ -383,6 +422,12 @@ class MayaTimeSliderController:
         row3.addWidget(self.btn_script_ed)
 
         v_layout.addLayout(row3)
+
+        # Row 4: Maya Help Line — describes the active tool (replaces Blender's status bar text)
+        self.lbl_help_line = QtWidgets.QLabel(TOOL_HELP_TEXT["TRANSLATE"], self.root)
+        self.lbl_help_line.setObjectName("MayaHelpLine")
+        self.lbl_help_line.setFixedHeight(18)
+        v_layout.addWidget(self.lbl_help_line)
 
     def refresh_from_scene(self) -> None:
         if self._updating:
@@ -402,9 +447,8 @@ class MayaTimeSliderController:
             self.range_bar.update()
 
             self.lbl_time_badge.setText(f"TIME  {float(st['frame_current']):.2f}")
-            self.spin_current.setValue(st["frame_current"])
-            self.spin_start.setValue(st["frame_start"])
-            self.spin_end.setValue(st["frame_end"])
+            for field, value in ((self.spin_current,st['frame_current']), (self.spin_start,st['frame_start']), (self.spin_end,st['frame_end'])):
+                if not field.hasFocus():field.setValue(value)
             self.lbl_fps.setText(f"{st['fps']} fps")
 
             ak = bool(st["auto_key"])
@@ -421,6 +465,16 @@ class MayaTimeSliderController:
             n_t = len(st["transform_key_frames"])
             n_s = len(st["shape_key_frames"])
             self.lbl_key_summary.setText(f"Keys: {n_t} Xform | {n_s} Morph")
+
+            try:
+                from .. import commands
+                import bpy
+                if bpy.context.mode == 'SCULPT':
+                    self.lbl_help_line.setText('Sculpt: blank drag orbits · Alt pans · release Alt to zoom · Shift smooths · Ctrl masks · Ctrl+Shift hides · B brushes · S size · U intensity · O focal')
+                else:
+                    self.lbl_help_line.setText(TOOL_HELP_TEXT.get(commands.get_active_tool(), TOOL_HELP_TEXT["TRANSLATE"]))
+            except Exception:
+                pass
 
             # Sync MEL/PY command feedback readout
             try:
@@ -492,7 +546,7 @@ class MayaTimeSliderController:
         if not self._updating:
             self.set_current_frame(int(val))
 
-    def _on_range_spin_changed(self, _val: int) -> None:
+    def _on_range_spin_changed(self, _val: int = 0) -> None:
         if self._updating:
             return
         try:
@@ -527,18 +581,8 @@ class MayaTimeSliderController:
     def _on_set_key(self) -> None:
         try:
             import bpy
-            from .. import character
-
-            obj = getattr(bpy.context, "active_object", None)
-            if obj is not None:
-                obj.keyframe_insert(data_path="location")
-                obj.keyframe_insert(data_path="rotation_euler")
-                obj.keyframe_insert(data_path="scale")
-                sk = getattr(getattr(obj, "data", None), "shape_keys", None)
-                if sk is not None and len(sk.key_blocks) > 1:
-                    for kb in sk.key_blocks[1:]:
-                        if "_tween_w" not in kb.name:
-                            character.keyframe_shape_target(obj, kb.name)
+            from . import menus
+            menus.run_op("landfall_studio.set_key")
         except Exception:
             pass
         self.refresh_from_scene()

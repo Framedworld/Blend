@@ -29,6 +29,31 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Sequence
 
+# Studio's visible preset names extend the upstream catalog through its native
+# Principled templates. These are editable starting looks, stored in the graph.
+STUDIO_SHADER_PRESETS = {
+    'Chrome': ('Metal', {'Roughness': .08, 'Base Color': (.8,.8,.8,1)}),
+    'Gold': ('Metal', {'Roughness': .2, 'Base Color': (1,.766,.336,1)}),
+    'Car Paint': ('Clearcoat', {'Roughness': .24, 'Coat Roughness': .12, 'Base Color': (.25,.025,.015,1)}),
+    'Subsurface Skin': ('Skin (SSS)', {'Base Color': (.55,.25,.15,1)}),
+}
+
+
+def _studio_preset(name):
+    return next((key for key in STUDIO_SHADER_PRESETS if key.lower()==str(name).strip().lower()),None)
+
+
+def _apply_studio_overrides(mat,name):
+    node=_find_principled_node(mat)
+    applied=[]
+    if node:
+        for field,value in STUDIO_SHADER_PRESETS[name][1].items():
+            socket=node.inputs.get(field)
+            if socket is not None:
+                socket.default_value=value
+                applied.append(field)
+    return applied
+
 
 def _find_principled_node(mat: Any) -> Optional[Any]:
     nt = getattr(mat, "node_tree", None) if mat is not None else None
@@ -133,6 +158,7 @@ def get_shader_templates() -> List[str]:
     from blendertk.mat_utils._mat_utils import MatUtils
 
     base = list(MatUtils.get_shader_templates())
+    base.extend(name for name in STUDIO_SHADER_PRESETS if name not in base)
     if "standard" not in base:
         base.insert(0, "standard")
     return base
@@ -148,8 +174,10 @@ def create_from_template(
     import bpy
     from blendertk.mat_utils._mat_utils import MatUtils
 
-    templates = MatUtils.get_shader_templates()
+    templates = get_shader_templates()
     t_clean = str(template_name or "standard").strip()
+    local=_studio_preset(t_clean)
+    if local:t_clean=local
     alias_map = {
         "metallic": "Metal",
         "metal": "Metal",
@@ -180,7 +208,8 @@ def create_from_template(
     if is_standard:
         mat = MatUtils.create_mat("standard", name=mat_name)
     else:
-        mat = MatUtils.create_shader_template(t_clean, name=mat_name)
+        mat = MatUtils.create_shader_template(STUDIO_SHADER_PRESETS[local][0] if local else t_clean, name=mat_name)
+        if local:_apply_studio_overrides(mat,local)
     props = _extract_shader_preview_props(mat)
     # Sync viewport diffuse_color so Solid (Material color) mode reflects the template immediately
     try:
@@ -219,7 +248,9 @@ def apply_template_to_material(mat_name: str, template_name: str) -> Dict[str, A
     mat = bpy.data.materials.get(str(mat_name))
     if mat is None:
         return {"ok": False, "error": f"Material '{mat_name}' not found"}
-    applied = MatUtils.apply_shader_template(mat, template_name)
+    local=_studio_preset(template_name)
+    applied = MatUtils.apply_shader_template(mat, STUDIO_SHADER_PRESETS[local][0] if local else template_name)
+    if local:applied+=_apply_studio_overrides(mat,local)
     props = _extract_shader_preview_props(mat)
     try:
         bc = props["base_color"]

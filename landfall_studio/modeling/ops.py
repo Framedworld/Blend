@@ -9,7 +9,182 @@ except ImportError:
 
 from . import caddy, diagnostics_uv, live_surface, quad_draw
 
+
+def _quad_draw_edge_at_cursor(context, event):
+    """Pick a nearby projected retopology edge for a discrete Ctrl-click."""
+    from bpy_extras import view3d_utils
+    from mathutils import Vector
+
+    obj = quad_draw.ensure_retopo_mesh()
+    if obj.mode == "EDIT":
+        obj.update_from_editmode()
+    mouse = Vector((event.mouse_region_x, event.mouse_region_y))
+    best_index, best_distance = None, 28.0
+    for edge in obj.data.edges:
+        endpoints = [view3d_utils.location_3d_to_region_2d(context.region, context.region_data,
+            obj.matrix_world @ obj.data.vertices[index].co) for index in edge.vertices]
+        if any(point is None for point in endpoints):
+            continue
+        start, end = endpoints
+        delta = end - start
+        factor = max(0.0, min(1.0, (mouse-start).dot(delta) / max(delta.length_squared, 1e-12)))
+        distance = (mouse - (start + delta * factor)).length
+        if distance < best_distance:
+            best_index, best_distance = edge.index, distance
+    return best_index
+
+
 if bpy is not None:
+
+    class LANDFALL_STUDIO_OT_duplicate_objects(bpy.types.Operator):
+        """Duplicate in place, retaining native data and independent generated helpers."""
+
+        bl_idname = "landfall_studio.duplicate_objects"
+        bl_label = "Duplicate Objects"
+        bl_description = "Duplicate selected objects in place; move the selected copies with W"
+        bl_options = {"REGISTER", "UNDO"}
+
+        linked: bpy.props.BoolProperty(name="Instance", default=False, options={'SKIP_SAVE'},
+            description="Share the original mesh data; object transforms and generated placement helpers remain independent")
+
+        @classmethod
+        def poll(cls, context):
+            return context.mode == 'OBJECT' and bool(context.selected_editable_objects)
+
+        def execute(self, context):
+            from ..sculpt.instances import ensure_owners
+            from ..commands import record_command
+
+            status = bpy.ops.object.duplicate('EXEC_DEFAULT', linked=self.linked)
+            if 'FINISHED' not in status:
+                return {'CANCELLED'}
+            for obj in context.selected_objects:
+                ensure_owners(obj)
+            record_command(self.bl_idname, kwargs={'linked':self.linked},
+                callable_fn=bpy.ops.landfall_studio.duplicate_objects,
+                label='Duplicate Instance' if self.linked else 'Duplicate')
+            return {'FINISHED'}
+
+    def _maya_group_name():
+        index = 1
+        while bpy.data.objects.get(f"group{index}") is not None:
+            index += 1
+        return f"group{index}"
+
+    class LANDFALL_STUDIO_OT_group_objects(bpy.types.Operator):
+        """Maya Ctrl+G: parent the selection under a new empty group transform."""
+
+        bl_idname = "landfall_studio.group_objects"
+        bl_label = "Group"
+        bl_description = ("Group the selected objects under a new transform with its pivot at their "
+                          "bounding-box center, as Maya's Ctrl+G. World positions are unchanged")
+        bl_options = {"REGISTER", "UNDO"}
+
+        @classmethod
+        def poll(cls, context):
+            return context.mode == 'OBJECT' and bool(context.selected_editable_objects)
+
+        def execute(self, context):
+            from mathutils import Matrix, Vector
+
+            members = list(context.selected_editable_objects)
+            # Only top-most selected objects move; selected children follow their parents.
+            chosen = set(members)
+            roots = [o for o in members if not any(p in chosen for p in _ancestors(o))]
+            corners = [o.matrix_world @ Vector(c) for o in members for c in o.bound_box]
+            if not corners:
+                corners = [o.matrix_world.translation for o in members]
+            low = Vector(tuple(min(c[i] for c in corners) for i in range(3)))
+            high = Vector(tuple(max(c[i] for c in corners) for i in range(3)))
+            parents = {o.parent for o in roots}
+            common = parents.pop() if len(parents) == 1 else None
+            group = bpy.data.objects.new(_maya_group_name(), None)
+            group.empty_display_type = 'PLAIN_AXES'
+            group.empty_display_size = max(0.1, (high - low).length * 0.1)
+            collection = roots[0].users_collection[0] if roots[0].users_collection else context.collection
+            collection.objects.link(group)
+            # Maya nests a new group under the selection's common parent.
+            group.parent = common
+            group.matrix_world = Matrix.Translation((low + high) / 2.0)
+            context.view_layer.update()
+            for obj in roots:
+                world = obj.matrix_world.copy()
+                obj.parent = group
+                obj.matrix_world = world
+            for obj in context.selected_objects:
+                obj.select_set(False)
+            group.select_set(True)
+            context.view_layer.objects.active = group
+            self.report({'INFO'}, f"Grouped {len(roots)} object(s) under {group.name}")
+            return {'FINISHED'}
+
+    class LANDFALL_STUDIO_OT_ungroup_objects(bpy.types.Operator):
+        """Maya Ungroup: move a group's children to its parent and remove the group."""
+
+        bl_idname = "landfall_studio.ungroup_objects"
+        bl_label = "Ungroup"
+        bl_description = "Remove the selected group transforms, keeping their children in place"
+        bl_options = {"REGISTER", "UNDO"}
+
+        @classmethod
+        def poll(cls, context):
+            return context.mode == 'OBJECT' and any(
+                o.type == 'EMPTY' and o.children for o in context.selected_editable_objects)
+
+        def execute(self, context):
+            groups = [o for o in context.selected_editable_objects if o.type == 'EMPTY' and o.children]
+            released = []
+            for group in groups:
+                for child in list(group.children):
+                    world = child.matrix_world.copy()
+                    child.parent = group.parent
+                    child.matrix_world = world
+                    released.append(child)
+                bpy.data.objects.remove(group, do_unlink=True)
+            for obj in context.selected_objects:
+                obj.select_set(False)
+            for child in released:
+                child.select_set(True)
+            if released:
+                context.view_layer.objects.active = released[0]
+            return {'FINISHED'}
+
+    def _ancestors(obj):
+        parent = obj.parent
+        while parent is not None:
+            yield parent
+            parent = parent.parent
+
+    class LANDFALL_STUDIO_OT_maya_extrude(bpy.types.Operator):
+        """Maya Ctrl+E: extrude faces in place and hand over to the manipulator and caddy."""
+
+        bl_idname = "landfall_studio.maya_extrude"
+        bl_label = "Extrude"
+        bl_description = ("Extrude the selected faces in place, as Maya's Ctrl+E. Drag the "
+                          "manipulator to set Thickness and Offset, or type them in the caddy")
+        bl_options = {"REGISTER", "UNDO"}
+
+        @classmethod
+        def poll(cls, context):
+            obj = context.active_object
+            return obj is not None and obj.type == "MESH" and context.mode == "EDIT_MESH"
+
+        def invoke(self, context, event):
+            return self.execute(context)
+
+        def execute(self, context):
+            obj = context.active_object
+            obj.update_from_editmode()
+            if not any(polygon.select for polygon in obj.data.polygons):
+                # Edges and vertices keep the familiar extrude-and-drag. That
+                # modal records its own history; this wrapper records none.
+                bpy.ops.landfall.extrude('INVOKE_DEFAULT')
+                return {"CANCELLED"}
+            res = caddy.begin_maya_extrude(context)
+            if not res.get("ok"):
+                self.report({"WARNING"}, res.get("error", "Extrude failed."))
+                return {"CANCELLED"}
+            return {"FINISHED"}
 
     class LANDFALL_STUDIO_OT_modeling_caddy(bpy.types.Operator):
         """Invoke a Maya-style modeling operation (`Extrude`, `Bevel`, `Bridge`, `Connect`) with a live In-Viewport Heads-Up Caddy."""
@@ -37,7 +212,9 @@ if bpy is not None:
 
         def execute(self, context):
             chosen_tool = (self.tool_id or self.tool_type or "EXTRUDE").strip().upper()
-            res = caddy.invoke_modeling_caddy(chosen_tool)
+            # Every Extrude route is Maya's one Extrude (see begin_maya_extrude).
+            res = (caddy.begin_maya_extrude(context) if chosen_tool == "EXTRUDE"
+                   else caddy.invoke_modeling_caddy(chosen_tool))
             if not res.get("ok"):
                 self.report({"WARNING"}, res.get("error", "Modeling caddy failed."))
                 return {"CANCELLED"}
@@ -125,11 +302,11 @@ if bpy is not None:
             return {"FINISHED"}
 
     class LANDFALL_STUDIO_OT_quad_draw_modal(bpy.types.Operator):
-        """Maya-style `Quad Draw` retopology modal & chord operator (`LMB` plot dot, `Shift` fill quad, `Ctrl` loop cut, `Shift-drag` relax, `Tab-drag` extrude strip)."""
+        """Quad Draw: click dots, Shift-click to fill four dots, Ctrl-click an edge to insert a loop."""
 
         bl_idname = "landfall_studio.quad_draw_modal"
         bl_label = "Maya Quad Draw"
-        bl_description = "Quad Draw retopology tool (LMB plot dots, Shift+LMB fill quad, Ctrl+LMB loop cut, Shift-drag relax, Tab-drag extrude strip)"
+        bl_description = "Click a surface to plot dots; Shift-click fills four dots or relaxes the mesh; Ctrl-click a nearby retopology edge inserts a loop; Escape exits. Use the Toolkit buttons for Strip and Relax"
         bl_options = {"REGISTER", "UNDO"}
 
         action: bpy.props.EnumProperty(
@@ -138,9 +315,9 @@ if bpy is not None:
                 ("MODAL", "Interactive Modal", "Start interactive Quad Draw modal tool"),
                 ("PLOT_DOT", "Plot Dot", "Plot a Quad Draw dot projected onto Make Live"),
                 ("FILL_QUAD", "Fill Quad (Shift)", "Fill a quad from 4 plotted dots"),
-                ("EXTRUDE_STRIP", "Extrude Strip (Tab)", "Extrude boundary edge strip onto Make Live"),
+                ("EXTRUDE_STRIP", "Extrude Strip", "Extrude a boundary edge using the Delta parameter"),
                 ("LOOP_CUT", "Insert Loop (Ctrl)", "Insert an edge loop across the quad strip"),
-                ("RELAX", "Relax Vertices (Shift-Drag)", "Relax vertices while constrained to Make Live"),
+                ("RELAX", "Relax Mesh", "Relax retopology vertices while constrained to Make Live"),
                 ("CLEAR_DOTS", "Clear Dots", "Clear plotted Quad Draw dots"),
             ),
             default="MODAL",
@@ -165,6 +342,8 @@ if bpy is not None:
             elif act == "CLEAR_DOTS":
                 res = quad_draw.clear_quad_draw_dots()
             else:
+                if not bpy.app.background and context.area is not None and context.area.type == "VIEW_3D":
+                    return self.invoke(context, None)
                 quad_draw.set_quad_draw_active(True)
                 quad_draw.ensure_retopo_mesh()
                 res = {"ok": True}
@@ -205,21 +384,25 @@ if bpy is not None:
                     coord = (event.mouse_region_x, event.mouse_region_y)
                     ray_origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, coord)
                     ray_vec = view3d_utils.region_2d_to_vector_3d(region, rv3d, coord)
-                    hit_info = live_surface.raycast_live_surface(
-                        (ray_origin.x, ray_origin.y, ray_origin.z),
-                        (ray_vec.x, ray_vec.y, ray_vec.z),
-                    )
-                    hit_loc = hit_info.get("location", (0.0, 0.0, 0.0))
-
                     if event.shift and not event.ctrl:
                         if len(quad_draw.get_quad_draw_dots()) >= 4:
-                            quad_draw.fill_quad_from_dots()
+                            res = quad_draw.fill_quad_from_dots(consume_dots=True)
                         else:
-                            quad_draw.relax_quad_draw_verts(iterations=2)
+                            res = quad_draw.relax_quad_draw_verts(iterations=2)
                     elif event.ctrl and not event.shift:
-                        quad_draw.insert_quad_draw_loop(edge_index=0, factor=0.5)
+                        edge_index = _quad_draw_edge_at_cursor(context, event)
+                        if edge_index is None:
+                            self.report({"WARNING"}, "Quad Draw: Ctrl-click near a retopology edge to insert a loop.")
+                            return {"RUNNING_MODAL"}
+                        res = quad_draw.insert_quad_draw_loop(edge_index=edge_index, factor=0.5)
                     else:
-                        quad_draw.plot_quad_draw_dot(hit_loc)
+                        hit_info = live_surface.raycast_live_surface(tuple(ray_origin), tuple(ray_vec))
+                        if not hit_info.get("ok"):
+                            self.report({"WARNING"}, "Quad Draw: click a mesh surface to place a point.")
+                            return {"RUNNING_MODAL"}
+                        res = quad_draw.plot_quad_draw_dot(hit_info["location"])
+                    if not res.get("ok"):
+                        self.report({"WARNING"}, res.get("error", "Quad Draw action could not finish."))
 
                     if context.area:
                         context.area.tag_redraw()
@@ -353,6 +536,10 @@ if bpy is not None:
             return {"FINISHED"}
 
     MODELING_CLASSES = (
+        LANDFALL_STUDIO_OT_duplicate_objects,
+        LANDFALL_STUDIO_OT_group_objects,
+        LANDFALL_STUDIO_OT_ungroup_objects,
+        LANDFALL_STUDIO_OT_maya_extrude,
         LANDFALL_STUDIO_OT_modeling_caddy,
         LANDFALL_STUDIO_OT_scrub_caddy_param,
         LANDFALL_STUDIO_OT_target_weld,

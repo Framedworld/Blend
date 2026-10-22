@@ -158,6 +158,26 @@ def load_upstream_landfall(
 
     module.prefs = _studio_prefs
 
+    # The upstream startup timer applies Maya colors and enables its grid.
+    # If Sculpt already owns the desktop, preserve its current grid choice
+    # across that deferred initialization rather than switching grids on.
+    original_deferred_sync=getattr(module,'_deferred_sync',None)
+    if original_deferred_sync:
+        def _studio_deferred_sync():
+            import bpy
+            from .. import sculpt
+            saved=[];finite=None
+            if sculpt.is_engaged():
+                finite=getattr(bpy.context.scene,'landfall_grid_finite',None)
+                fields=('show_floor','show_ortho_grid','show_axis_x','show_axis_y','show_axis_z')
+                saved=[(a,{f:getattr(a.spaces.active.overlay,f) for f in fields}) for w in bpy.context.window_manager.windows for a in w.screen.areas if a.type=='VIEW_3D']
+            try:return original_deferred_sync()
+            finally:
+                if finite is not None:bpy.context.scene.landfall_grid_finite=finite
+                for area,values in saved:
+                    for field,value in values.items():setattr(area.spaces.active.overlay,field,value)
+        module._deferred_sync=_studio_deferred_sync
+
     # Wrap _apply_project so Landfall project changes sync to blendertk
     if hasattr(module, "_apply_project"):
         orig_apply_project = module._apply_project
@@ -184,11 +204,53 @@ def load_upstream_landfall(
                 from .. import keymaps
 
                 if _registered:
-                    keymaps.apply_profile(bpy.context, keymaps.get_active_profile())
+                    keymaps.profiles.reapply_profile_mutes(bpy.context)
             except Exception:
                 pass
 
         module._reapply_mutes = _wrapped_reapply_mutes
+
+    # Upstream detects its own keys by the word "landfall". Studio owns its
+    # separate keys, so exclude those from upstream repair/rebuild decisions.
+    if hasattr(module, "_kmi_registered_by_us"):
+        original_owns_key = module._kmi_registered_by_us
+
+        def _upstream_owns_key(km_name, kmi):
+            if kmi.idname.startswith(("landfall_studio.", "tentacle.")):
+                return False
+            from ..keymaps import profiles
+            if profiles.sculpt_mutes_item(km_name,kmi):
+                return False
+            return original_owns_key(km_name, kmi)
+
+        module._kmi_registered_by_us = _upstream_owns_key
+
+    # Share actual sculpt levels with Maya 1/2/3 instead of adding a second
+    # subdivision stack over a Multires surface. Ordinary Maya meshes retain
+    # the upstream implementation unchanged.
+    preview_class=getattr(module,'LANDFALL_OT_smooth_preview',None)
+    if preview_class is not None:
+        original_preview=preview_class.execute
+        def _shared_sculpt_preview(operator,context):
+            import bpy
+            objects=[o for o in context.selected_objects if o.type=='MESH']
+            if not objects and context.view_layer.objects.active:
+                objects=[context.view_layer.objects.active]
+            if not any(any(m.type=='MULTIRES' for m in o.modifiers) for o in objects):
+                return original_preview(operator,context)
+            context.scene.landfall_cage_show=operator.mode=='BOTH'
+            for obj in objects:
+                multi=next((m for m in obj.modifiers if m.type=='MULTIRES'),None)
+                if multi is None:
+                    with context.temp_override(selected_objects=[obj]):original_preview(operator,context)
+                    continue
+                level=0 if operator.mode=='CAGE' else multi.total_levels
+                multi.levels=multi.sculpt_levels=level
+                multi.show_viewport=True
+                obj.show_wire=False
+                obj.show_all_edges=False
+            return {'FINISHED'}
+        preview_class.execute=_shared_sculpt_preview
 
     _landfall_module = module
     return module

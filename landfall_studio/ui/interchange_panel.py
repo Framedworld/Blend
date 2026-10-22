@@ -170,6 +170,8 @@ def create_interchange_widget() -> Any:
             self.tbl_refs.verticalHeader().setVisible(False)
             self.tbl_refs.setFixedHeight(105)
             self.tbl_refs.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+            self.tbl_refs.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+            self.tbl_refs.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
             blay.addWidget(self.tbl_refs)
 
             ref_btns = QtWidgets.QHBoxLayout()
@@ -178,6 +180,7 @@ def create_interchange_widget() -> Any:
             btn_ref_mode = QtWidgets.QPushButton("Cycle N/R/T")
             btn_ref_reload = QtWidgets.QPushButton("Reload")
             btn_ref_remove = QtWidgets.QPushButton("Remove")
+            self.btn_ref_mode,self.btn_ref_reload,self.btn_ref_remove=btn_ref_mode,btn_ref_reload,btn_ref_remove
             btn_ref_add.clicked.connect(self._on_reference_add)
             btn_ref_mode.clicked.connect(self._on_reference_cycle_mode)
             btn_ref_reload.clicked.connect(self._on_reference_reload)
@@ -187,6 +190,7 @@ def create_interchange_widget() -> Any:
             ref_btns.addWidget(btn_ref_reload)
             ref_btns.addWidget(btn_ref_remove)
             blay.addLayout(ref_btns)
+            self.tbl_refs.itemSelectionChanged.connect(self._sync_reference_actions)
 
             # --- Section 3: Mandatory Preflight & Loss Report ---
             sec3 = QtWidgets.QFrame()
@@ -249,14 +253,14 @@ def create_interchange_widget() -> Any:
         def _on_preflight_clicked(self) -> None:
             p = self.txt_ma_path.text().strip()
             if not p:
-                return
+                return self._render_report_text({'ok':False,'error':'Choose a Maya source file first.'})
             pf = interchange.preflight_maya_scene(p)
             self._render_report_text(pf)
 
         def _on_import_clicked(self) -> None:
             p = self.txt_ma_path.text().strip()
             if not p:
-                return
+                return self._render_report_text({'ok':False,'error':'Choose a Maya source file first.'})
             if not self.txt_save_ma_path.text().strip():
                 self.txt_save_ma_path.setText(self._default_export_path_from_import(p))
             rep = interchange.import_maya_scene(
@@ -275,7 +279,14 @@ def create_interchange_widget() -> Any:
                     dst_p = self._default_export_path_from_import(src_p)
                     self.txt_save_ma_path.setText(dst_p)
                 else:
-                    return
+                    return self._render_report_text({'ok':False,'error':'Choose a destination file first.'})
+            from pathlib import Path
+            destination=Path(dst_p).expanduser()
+            if destination.suffix.lower() not in ('.ma','.mb'):destination=destination.with_suffix('.ma')
+            dst_p=str(destination)
+            if destination.is_file():
+                answer=QtWidgets.QMessageBox.question(self,'Replace Maya scene?',f'Replace the existing file?\n{destination}',QtWidgets.QMessageBox.Yes|QtWidgets.QMessageBox.No,QtWidgets.QMessageBox.No)
+                if answer!=QtWidgets.QMessageBox.Yes:return
             rep = interchange.save_as_maya_scene(
                 dst_p,
                 carrier=self.cmb_carrier.currentText(),
@@ -307,7 +318,8 @@ def create_interchange_widget() -> Any:
         def _on_reference_add(self) -> None:
             p = self.txt_ma_path.text().strip()
             if not p:
-                return
+                p,_=QtWidgets.QFileDialog.getOpenFileName(self,'Reference scene','','Scene files (*.blend *.ma *.mb *.usd *.usda *.usdc);;All files (*)')
+                if not p:return
             res = interchange.reference_scene(p)
             self.refresh_from_scene()
             self._render_report_text(res)
@@ -319,28 +331,41 @@ def create_interchange_widget() -> Any:
             refs = {r["name"]: r for r in interchange.list_scene_references()}
             cur = refs.get(name, {}).get("display_mode", "off")
             nxt = {"off": "reference", "reference": "template", "template": "off"}.get(cur, "off")
-            interchange.set_reference_mode(name, nxt)
+            result=interchange.set_reference_mode(name, nxt)
             self.refresh_from_scene()
+            self._render_report_text(result)
 
         def _on_reference_reload(self) -> None:
             name = self._selected_ref_name()
             if name:
-                interchange.reload_reference_scene(name)
+                result=interchange.reload_reference_scene(name)
                 self.refresh_from_scene()
+                self._render_report_text(result)
 
         def _on_reference_remove(self) -> None:
             name = self._selected_ref_name()
             if name:
-                interchange.remove_reference_scene(name)
+                result=interchange.remove_reference_scene(name)
                 self.refresh_from_scene()
+                self._render_report_text(result)
 
-        def _render_report_text(self, rep: Dict[str, Any]) -> None:
+        def _sync_reference_actions(self):
+            selected=bool(self._selected_ref_name())
+            for button in (self.btn_ref_mode,self.btn_ref_reload,self.btn_ref_remove):
+                button.setEnabled(selected)
+                button.setToolTip('' if selected else 'Select a reference row first.')
+
+        def _render_report_text(self, rep: Dict[str, Any], publish=True) -> None:
             if not rep:
                 return
-            st = rep.get("status", "READY")
+            self._shown_report=rep
+            failed=not rep.get('ok',True) or bool(rep.get('error'))
+            st = rep.get("status", "ERROR" if failed else "READY")
             self.lbl_status_pill.setText(st)
+            from . import desktop
+            if publish:desktop.set_command_feedback('Interchange',rep.get('error') or st,'ERROR' if failed else 'INFO')
             lines = [
-                f"STATUS: {st} | Source Unchanged: {rep.get('source_unchanged', True)}",
+                f"STATUS: {st} | Source Unchanged: {rep.get('source_unchanged', 'Not measured')}",
                 f"Source: {rep.get('source_path', '-')}",
             ]
             if "hierarchy_and_geometry" in rep:
@@ -384,16 +409,19 @@ def create_interchange_widget() -> Any:
                 snap = get_interchange_ui_snapshot()
                 rt = snap["runtime"]
                 if rt.get("available"):
-                    self.lbl_runtime_badge.setText(f"Maya {rt.get('maya_version') or ''} • mayapy Ready")
-                    self.lbl_runtime_badge.setObjectName("MayaBadgeGreen")
+                    self.lbl_runtime_badge.setText(f"Maya {rt.get('maya_version') or ''} • Detected")
+                    self.lbl_runtime_badge.setToolTip('Runtime found. Conversion still requires Maya to initialize successfully; inspect the operation report.')
+                    self.lbl_runtime_badge.setObjectName("MayaBadgeAmber")
                 else:
                     self.lbl_runtime_badge.setText("Maya Missing (BLOCKED)")
                     self.lbl_runtime_badge.setObjectName("MayaBadgeAmber")
 
                 refs = snap["references"]
+                selected=self._selected_ref_name()
                 self.tbl_refs.setRowCount(len(refs))
                 for idx, r in enumerate(refs):
                     it_name = QtWidgets.QTableWidgetItem(r["name"])
+                    it_name.setToolTip(str(r.get('filepath') or r.get('path') or r.get('source_path') or '')+('' if r.get('exists',True) else '\nMissing file — use File > Find Missing Files.'))
                     mode_lbl = {"off": "Normal (N)", "reference": "Ref (R)", "template": "Tmpl (T)"}.get(
                         r["display_mode"], r["display_mode"]
                     )
@@ -402,17 +430,30 @@ def create_interchange_widget() -> Any:
                     self.tbl_refs.setItem(idx, 0, it_name)
                     self.tbl_refs.setItem(idx, 1, it_mode)
                     self.tbl_refs.setItem(idx, 2, it_objs)
+                    if r['name']==selected:self.tbl_refs.selectRow(idx)
+                self._sync_reference_actions()
 
-                if snap["last_report"]:
-                    self._render_report_text(snap["last_report"])
+                latest=getattr(self,'_shown_report',None) or snap['last_report']
+                if latest:
+                    self._render_report_text(latest,publish=False)
                 elif not self.txt_report.toPlainText():
                     self.txt_report.setPlainText(
                         f"Maya Runtime: {rt.get('mayapy_exe') or 'Not Found'}\n"
-                        "Ready for staged .ma/.mb import, save_as, reference linking, and round-trip loss reporting."
+                        "Conversion requires a working Maya runtime. Operations report conversion failures here."
                     )
             finally:
                 self._updating = False
 
+    # A Qt signal must never leave a stale PASS visible after a caught file or
+    # converter error. Keep the existing actions/dispatcher; normalize feedback.
+    def guarded_action(method):
+        def call(self,*_args):
+            try:return method(self)
+            except Exception as exc:
+                return self._render_report_text({'ok':False,'status':'ERROR','error':str(exc)})
+        return call
+    for name in ('_on_preflight_clicked','_on_import_clicked','_on_save_clicked','_on_send_clicked','_on_reference_add','_on_reference_cycle_mode','_on_reference_reload','_on_reference_remove'):
+        setattr(_MayaInterchangeWidget,name,guarded_action(getattr(_MayaInterchangeWidget,name)))
     return _MayaInterchangeWidget()
 
 

@@ -139,7 +139,7 @@ def execute_command(cmd_id: str, **kwargs: Any) -> Any:
     if spec is None:
         raise KeyError(f"Command '{cmd_id}' is not registered in landfall_studio.commands")
     result = spec["handler"](**kwargs)
-    if spec.get("repeatable", True):
+    if spec.get("repeatable", True) and _command_result_succeeded(result):
         record_command(
             cmd_id=cmd_id,
             kwargs=kwargs,
@@ -148,6 +148,15 @@ def execute_command(cmd_id: str, **kwargs: Any) -> Any:
             repeatable=True,
         )
     return result
+
+
+def _command_result_succeeded(result: Any) -> bool:
+    """Understand both Studio result dictionaries and Blender operator status sets."""
+    if isinstance(result, dict):
+        return bool(result.get("ok", True))
+    if isinstance(result, set):
+        return "CANCELLED" not in result and bool(result & {"FINISHED", "RUNNING_MODAL"})
+    return result is not False
 
 
 def get_last_command() -> Optional[Dict[str, Any]]:
@@ -184,7 +193,26 @@ def repeat_last_command() -> Dict[str, Any]:
         if fn is None:
             fn = _resolve_bpy_op(cmd_id)
         if fn is not None:
-            res = fn(**kwargs)
+            try:
+                res = fn(**kwargs)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "source": "studio_registry",
+                    "id": cmd_id,
+                    "label": last.get("label", cmd_id),
+                    "error": str(exc),
+                }
+            if not _command_result_succeeded(res):
+                error = res.get("error") or res.get("reason") if isinstance(res, dict) else None
+                return {
+                    "ok": False,
+                    "source": "studio_registry",
+                    "id": cmd_id,
+                    "label": last.get("label", cmd_id),
+                    "result": str(res),
+                    "error": error or f"Command did not finish: {res}",
+                }
             # Re-stamp timestamp on repeat
             last["timestamp"] = time.monotonic()
             try:
@@ -238,6 +266,8 @@ def repeat_last_command() -> Dict[str, Any]:
 
 def clear_state() -> None:
     """Reset command history and tool state (called on `unregister()`)."""
+    from .scene_edits import cancel_all
+    cancel_all()
     _command_history.clear()
     _registered_commands.clear()
     _tool_state.update(
@@ -248,3 +278,8 @@ def clear_state() -> None:
             "last_component_mode": "VERT",
         }
     )
+
+
+def clear_history():
+    """Repeat does not retain references to objects from a replaced scene."""
+    _command_history.clear()

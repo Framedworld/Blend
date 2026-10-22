@@ -19,6 +19,7 @@ from . import (
     hypershade_panel,
     interchange_panel,
     modeling_toolkit,
+    modifier_stack,
     shape_editor,
     style,
     tool_settings,
@@ -40,7 +41,7 @@ def _create_rotated_edge_tab(
             self.mode_key = mode_key
             self._hovered = False
             self.setCheckable(True)
-            self.setFixedSize(26, height)
+            self.setFixedSize(28, height)
             self.setCursor(QtCore.Qt.PointingHandCursor)
             self.setToolTip(f"{text} ({mode_key})")
             self.clicked.connect(lambda: on_click(mode_key))
@@ -81,16 +82,15 @@ def _create_rotated_edge_tab(
             p.translate(w / 2.0, h / 2.0)
             p.rotate(-90.0)
             f = p.font()
-            f.setPixelSize(9)
-            f.setBold(True)
-            f.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 0.8)
+            f.setPixelSize(11)
+            f.setBold(active)
             p.setFont(f)
             p.setPen(
                 QtGui.QColor("#E6EDF3")
                 if active
                 else (QtGui.QColor("#C8D1DC") if self._hovered else QtGui.QColor("#7D8590"))
             )
-            text_rect = QtCore.QRectF(-h / 2.0 + 4.0, -w / 2.0, h - 8.0, w)
+            text_rect = QtCore.QRectF(-h / 2.0 + 6.0, -w / 2.0, h - 12.0, w)
             p.drawText(text_rect, QtCore.Qt.AlignCenter, text)
             p.restore()
             p.end()
@@ -99,6 +99,7 @@ def _create_rotated_edge_tab(
 
 
 PANEL_TITLES = {
+    "ZBRUSH_STUDIO": "ZBRUSH SCULPT STUDIO  ⇄ GoZ",
     "CHANNEL_BOX": "CHANNEL BOX / LAYER EDITOR",
     "MODELING_TOOLKIT": "MAYA MODELING TOOLKIT",
     "HYPERSHADE": "HYPERSHADE • MATERIAL BROWSER",
@@ -106,15 +107,28 @@ PANEL_TITLES = {
     "MAYA_INTERCHANGE": "MAYA .MA / .MB REFERENCE",
     "ATTRIBUTE_EDITOR": "ATTRIBUTE EDITOR",
     "TOOL_SETTINGS": "TOOL SETTINGS • OPTION BOX",
+    "MODIFIER_STACK": "MODIFIER STACK",
 }
 
+QT_PAGE_MODES = (
+    "ZBRUSH_STUDIO",
+    "CHANNEL_BOX",
+    "MODELING_TOOLKIT",
+    "HYPERSHADE",
+    "SHAPE_EDITOR",
+    "MAYA_INTERCHANGE",
+    "ATTRIBUTE_EDITOR",
+    "TOOL_SETTINGS",
+    "MODIFIER_STACK",
+)
+
 WORKSPACE_SPINE_TABS = {
-    "Modeling Standard": ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS"),
+    "Modeling Standard": ("CHANNEL_BOX", "ATTRIBUTE_EDITOR", "MODELING_TOOLKIT", "TOOL_SETTINGS", "MODIFIER_STACK"),
     "Maya Classic": ("CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR"),
     "Lookdev / Hypershade": ("HYPERSHADE", "ATTRIBUTE_EDITOR", "CHANNEL_BOX"),
-    "FX & Geometry Nodes": ("CHANNEL_BOX", "ATTRIBUTE_EDITOR", "MODELING_TOOLKIT"),
+    "FX & Geometry Nodes": ("CHANNEL_BOX", "MODIFIER_STACK", "ATTRIBUTE_EDITOR", "MODELING_TOOLKIT"),
     "Rigging & Deform": ("SHAPE_EDITOR", "CHANNEL_BOX", "ATTRIBUTE_EDITOR"),
-    "Sculpt & Remesh Studio": ("TOOL_SETTINGS", "MODELING_TOOLKIT", "CHANNEL_BOX"),
+    "Sculpt & Remesh Studio": ("ZBRUSH_STUDIO", "SHAPE_EDITOR", "CHANNEL_BOX"),
     "Pipeline & .ma": ("MAYA_INTERCHANGE", "CHANNEL_BOX", "ATTRIBUTE_EDITOR"),
 }
 
@@ -140,6 +154,10 @@ def _create_tear_off_panel_widget(mode: str) -> Any:
         w = modeling_toolkit.create_modeling_toolkit_widget()
         w.refresh_from_scene()
         return w
+    if m == "MODIFIER_STACK":
+        panel = modifier_stack.create_modifier_stack_widget()
+        panel.root._lf_ctrl = panel
+        return panel.root
     if m == "ATTRIBUTE_EDITOR":
         ctrl = attribute_editor.MayaAttributeEditorWidget()
         ctrl.refresh()
@@ -187,7 +205,23 @@ def tear_off_panel(mode: str, x: int = 240, y: int = 135, width: int = 380, heig
     vlay.setContentsMargins(1, 1, 1, 1)
     vlay.setSpacing(0)
 
-    hdr = QtWidgets.QFrame()
+    class TearOffHeader(QtWidgets.QFrame):
+        anchor=None
+        def mousePressEvent(self,event):
+            if event.button()==QtCore.Qt.LeftButton:
+                self.anchor=event.globalPosition().toPoint()-win.pos();event.accept()
+            else:super().mousePressEvent(event)
+        def mouseMoveEvent(self,event):
+            if self.anchor is not None and event.buttons() & QtCore.Qt.LeftButton:
+                win.move(event.globalPosition().toPoint()-self.anchor);event.accept()
+            else:super().mouseMoveEvent(event)
+        def mouseReleaseEvent(self,event):
+            if self.anchor is not None:
+                self.anchor=None;desktop.clamp_widget_to_screen(win);event.accept()
+            else:super().mouseReleaseEvent(event)
+    hdr = TearOffHeader()
+    win._studio_grip=hdr
+    hdr.setCursor(QtCore.Qt.SizeAllCursor)
     hdr.setObjectName("MayaStatusLine")
     hdr.setFixedHeight(26)
     hlay = QtWidgets.QHBoxLayout(hdr)
@@ -218,6 +252,9 @@ def tear_off_panel(mode: str, x: int = 240, y: int = 135, width: int = 380, heig
 
     content = _create_tear_off_panel_widget(m)
     vlay.addWidget(content, 1)
+    grip=QtWidgets.QSizeGrip(win)
+    grip.setToolTip('Drag to resize this editor')
+    vlay.addWidget(grip,0,QtCore.Qt.AlignRight)
 
     win.resize(int(width), int(height))
     win.move(int(x), int(y))
@@ -229,6 +266,7 @@ def tear_off_panel(mode: str, x: int = 240, y: int = 135, width: int = 380, heig
     except Exception:
         pass
     win.show()
+    desktop.clamp_widget_to_screen(win)
     win.raise_()
     _tear_off_windows[m] = win
     return {"ok": True, "mode": m, "title": title, "floating": True, "geometry": (x, y, width, height)}
@@ -277,6 +315,52 @@ def teardown_tear_off_windows() -> None:
         close_tear_off_panel(m)
 
 
+class _AreaRect:
+    """Duck-typed stand-in for a `bpy.types.Region` covering a whole area."""
+
+    type = "WINDOW"
+
+    def __init__(self, area):
+        self.x, self.y = int(area.x), int(area.y)
+        self.width, self.height = int(area.width), int(area.height)
+
+
+def _build_channel_box_menubar():
+    """Maya Channel Box menus: Channels / Edit / Object / Show."""
+    from qtpy import QtWidgets
+    from . import menus
+
+    bar = QtWidgets.QMenuBar()
+    bar.setObjectName("MayaPanelMenuBar")
+    bar.setNativeMenuBar(False)
+    spec = [
+        ("Channels", [
+            menus.O("Key Selected", "anim.keyframe_insert", hint="S"),
+            menus.O("Delete Keys", "anim.keyframe_delete_v3d"),
+            menus.SEP,
+            menus.F("Driver Editor", menus._editor("DRIVER_EDITOR")),
+        ]),
+        ("Edit", [
+            menus.O("Delete History", "landfall_studio.delete_history", hint="Alt+Shift+D"),
+            menus.O("Delete Non-Deformer History", "landfall_studio.delete_non_deformer_history"),
+            menus.F("Modifier Stack", menus._dock("MODIFIER_STACK")),
+        ]),
+        ("Object", [
+            menus.O("Center Pivot", "landfall_studio.center_pivot_guarded"),
+            menus.O("Freeze Transformations", "landfall_studio.freeze_transformations_guarded"),
+            menus.O("Make Live", "landfall_studio.make_live", toggle=True),
+        ]),
+        ("Show", [
+            menus.F("Attribute Editor", menus._dock("ATTRIBUTE_EDITOR"), "Ctrl+A"),
+            menus.F("Tool Settings", menus._dock("TOOL_SETTINGS")),
+            menus.F("Native Properties", menus._dock("NATIVE_PROPERTIES")),
+        ]),
+    ]
+    for title, entries in spec:
+        menus.build_qmenu(bar.addMenu(title), entries)
+    return bar
+
+
 class _RightSidebarHostWidget:
     """Frameless Qt container holding the Workspace-Aware Vertical Edge Tab Spine + Maya Panel Header Bar + `QStackedWidget`."""
 
@@ -295,24 +379,28 @@ class _RightSidebarHostWidget:
         outer_hlay.setContentsMargins(0, 0, 0, 0)
         outer_hlay.setSpacing(0)
 
-        # 1. Left-Edge 26px Workspace-Aware Vertical Rotated Edge Tab Spine
+        # 1. Outer-right-edge 28px vertical tabs (as in current Maya), workspace-aware
         self.edge_strip = QtWidgets.QFrame()
         self.edge_strip.setObjectName("MayaEdgeTabStrip")
-        self.edge_strip.setFixedWidth(26)
+        self.edge_strip.setFixedWidth(28)
         elay = QtWidgets.QVBoxLayout(self.edge_strip)
         elay.setContentsMargins(0, 0, 0, 4)
         elay.setSpacing(0)
 
         self.edge_tabs = {}
-        for label, mkey, h_px in (
-            ("CHANNEL BOX", "CHANNEL_BOX", 104),
-            ("MODELING TOOLKIT", "MODELING_TOOLKIT", 118),
-            ("HYPERSHADE", "HYPERSHADE", 96),
-            ("SHAPE EDITOR", "SHAPE_EDITOR", 96),
-            ("MAYA BRIDGE", "MAYA_INTERCHANGE", 92),
-            ("ATTRIBUTE EDITOR", "ATTRIBUTE_EDITOR", 112),
-            ("TOOL SETTINGS", "TOOL_SETTINGS", 96),
+        fm = self.edge_strip.fontMetrics()
+        for label, mkey in (
+            ("Channel Box / Layer Editor", "CHANNEL_BOX"),
+            ("Attribute Editor", "ATTRIBUTE_EDITOR"),
+            ("Modeling Toolkit", "MODELING_TOOLKIT"),
+            ("Tool Settings", "TOOL_SETTINGS"),
+            ("Modifier Stack", "MODIFIER_STACK"),
+            ("Hypershade", "HYPERSHADE"),
+            ("Shape Editor", "SHAPE_EDITOR"),
+            ("Reference Editor", "MAYA_INTERCHANGE"),
+            ("ZBrush Sculpt Studio", "ZBRUSH_STUDIO"),
         ):
+            h_px = max(96, int(fm.horizontalAdvance(label) * 1.12) + 28)
             etab = _create_rotated_edge_tab(label, mkey, self._on_mode_tab_clicked, height=h_px)
             self.edge_tabs[mkey] = etab
             elay.addWidget(etab)
@@ -326,14 +414,13 @@ class _RightSidebarHostWidget:
         self._build_spine_more_menu()
         elay.addWidget(self.btn_spine_more, 0, QtCore.Qt.AlignHCenter)
 
-        outer_hlay.addWidget(self.edge_strip)
-
         # 2. Right Inspector Column (Clean Maya Tear-Off Header Bar + QStackedWidget)
         right_col = QtWidgets.QFrame()
         vlay = QtWidgets.QVBoxLayout(right_col)
         vlay.setContentsMargins(0, 0, 0, 0)
         vlay.setSpacing(0)
         outer_hlay.addWidget(right_col, 1)
+        outer_hlay.addWidget(self.edge_strip)
 
         # Clean Maya Panel Title + Tear-Off / Node Graph Header Bar (replaces the crowded 7-button row!)
         self.panel_header_bar = QtWidgets.QFrame()
@@ -393,6 +480,8 @@ class _RightSidebarHostWidget:
         self.page_cb_lay = QtWidgets.QVBoxLayout(self.page_cb)
         self.page_cb_lay.setContentsMargins(0, 0, 0, 0)
         self.page_cb_lay.setSpacing(0)
+        self.cb_menubar = _build_channel_box_menubar()
+        self.page_cb_lay.addWidget(self.cb_menubar, 0)
         self.stack.addWidget(self.page_cb)
 
         self.ae_ctrl = attribute_editor.ensure_attribute_editor_widget()
@@ -412,6 +501,13 @@ class _RightSidebarHostWidget:
 
         self.hs_widget = hypershade_panel.create_hypershade_widget()
         self.stack.addWidget(self.hs_widget)
+
+        self.ms_panel = modifier_stack.create_modifier_stack_widget()
+        self.stack.addWidget(self.ms_panel.root)
+
+        from .zbrush_panel import SculptPanel
+        self.sculpt_panel = SculptPanel()
+        self.stack.addWidget(self.sculpt_panel.root)
 
         self._attached_channels = None
         self.set_workspace_spine_preset("Modeling Standard")
@@ -444,8 +540,10 @@ class _RightSidebarHostWidget:
         self.btn_spine_more.setMenu(menu)
 
     def _on_tear_off_clicked(self) -> None:
-        target = self._active_mode if self._active_mode != "CHANNEL_BOX" else "TOOL_SETTINGS"
-        tear_off_panel(target)
+        if self._active_mode=='CHANNEL_BOX':
+            from . import desktop
+            desktop.undock_panel('channels')
+        else:tear_off_panel(self._active_mode)
 
     def _on_split_graph_clicked(self, checked: bool) -> None:
         from . import desktop
@@ -507,7 +605,10 @@ class _RightSidebarHostWidget:
             etab.setChecked(k == m)
             etab.update()
 
-        if m == "ATTRIBUTE_EDITOR":
+        if m == "ZBRUSH_STUDIO":
+            self.sculpt_panel.refresh()
+            self.stack.setCurrentWidget(self.sculpt_panel.root)
+        elif m == "ATTRIBUTE_EDITOR":
             if self.ae_ctrl is not None:
                 self.ae_ctrl.refresh()
             self.stack.setCurrentIndex(1)
@@ -531,6 +632,9 @@ class _RightSidebarHostWidget:
             if self.hs_widget is not None:
                 self.hs_widget.refresh_from_scene()
             self.stack.setCurrentIndex(6)
+        elif m == "MODIFIER_STACK":
+            self.ms_panel.refresh()
+            self.stack.setCurrentIndex(7)
         else:
             if self._attached_channels is not None:
                 self._attached_channels.show()
@@ -541,7 +645,7 @@ class _RightSidebarHostWidget:
 class RightAreaQtDock:
     """Right-column `WS_CHILD` dock manager supporting `Channel Box`, `Modeling Toolkit`, `Hypershade`, `Shape / Skin`, `Maya Interchange`, `Attribute Editor`, `Tool Settings`, and `Native Properties`."""
 
-    DEFAULT_WIDTH = 340
+    DEFAULT_WIDTH = 380
 
     def __init__(
         self,
@@ -558,12 +662,24 @@ class RightAreaQtDock:
             focus_on_hover=focus_on_hover,
             on_detach=self._handle_inner_detach,
         )
+        self._inner_dock.content_region = self._full_area_region
         self._user_on_detach = on_detach
         self._created_split_area = False
         self._saved_header_flag: Optional[bool] = None
         self._mode: str = "HIDDEN"
         self._channels_widget = None
         self._host_container: Optional[_RightSidebarHostWidget] = None
+
+    def _full_area_region(self):
+        """Region-shaped proxy spanning our whole area, so the overlay also hides the
+        Properties editor's native tab column (QtDock only covers the WINDOW region)."""
+        area = self._inner_dock.area
+        try:
+            if area is None or not any(r.type == "WINDOW" for r in area.regions):
+                return None
+            return _AreaRect(area)
+        except (ReferenceError, AttributeError):
+            return None
 
     @property
     def mode(self) -> str:
@@ -575,19 +691,7 @@ class RightAreaQtDock:
 
     @property
     def is_qt_embedded(self) -> bool:
-        return bool(
-            self._inner_dock.docked
-            and self._mode
-            in (
-                "CHANNEL_BOX",
-                "MODELING_TOOLKIT",
-                "HYPERSHADE",
-                "SHAPE_EDITOR",
-                "MAYA_INTERCHANGE",
-                "ATTRIBUTE_EDITOR",
-                "TOOL_SETTINGS",
-            )
-        )
+        return bool(self._inner_dock.docked and self._mode in QT_PAGE_MODES)
 
     @property
     def area(self):
@@ -621,15 +725,7 @@ class RightAreaQtDock:
 
     def _handle_inner_detach(self) -> None:
         self._created_split_area = False
-        if self._mode in (
-            "CHANNEL_BOX",
-            "MODELING_TOOLKIT",
-            "HYPERSHADE",
-            "SHAPE_EDITOR",
-            "MAYA_INTERCHANGE",
-            "ATTRIBUTE_EDITOR",
-            "TOOL_SETTINGS",
-        ):
+        if self._mode in QT_PAGE_MODES:
             self._mode = "HIDDEN"
         if self._user_on_detach is not None:
             try:
@@ -792,6 +888,9 @@ class RightAreaQtDock:
             self._channels_widget, target_mode="TOOL_SETTINGS"
         )
 
+    def show_zbrush_studio(self) -> bool:
+        return self._dock_host_in_right_area(self._channels_widget, target_mode="ZBRUSH_STUDIO")
+
     def show_modeling_toolkit(self) -> bool:
         """Show the Maya Qt `Modeling Toolkit` tab in the right dock."""
         modeling_toolkit.refresh_modeling_toolkit_widgets()
@@ -820,6 +919,11 @@ class RightAreaQtDock:
             self._channels_widget, target_mode="HYPERSHADE"
         )
 
+    def show_modifier_stack(self) -> bool:
+        """Show the Qt `Modifier Stack` tab in the right dock."""
+        modifier_stack.refresh_modifier_stack_widgets()
+        return self._dock_host_in_right_area(self._channels_widget, target_mode="MODIFIER_STACK")
+
     def show_native_properties(self, properties_context: str = "OBJECT") -> bool:
         """Suspend the `WS_CHILD` overlay to expose Blender's native `PROPERTIES` area."""
         import bpy
@@ -834,8 +938,8 @@ class RightAreaQtDock:
             self._mode = "NATIVE_PROPERTIES"
             return True
 
-        window = dock._window or btk.main_window()
-        area = dock._area
+        window = btk.main_window()
+        area = dock.area
         try:
             if area is not None and not any(r.type == "WINDOW" for r in area.regions):
                 area = None
@@ -855,8 +959,9 @@ class RightAreaQtDock:
             try:
                 space = area.spaces.active
                 if space is not None:
-                    if bpy.context.window is not None:
-                        space.show_region_header = True
+                    if window is not None and not getattr(space, "show_region_header", True):
+                        with bpy.context.temp_override(window=window, screen=window.screen, area=area):
+                            space.show_region_header = True
                     if properties_context:
                         try:
                             space.context = properties_context
@@ -875,7 +980,6 @@ class RightAreaQtDock:
         if not self.is_qt_embedded:
             return None
         dock = self._inner_dock
-        dock._last_rect = None
         dock._position(dock.content_region())
         return dock._last_rect
 
@@ -913,7 +1017,7 @@ class RightAreaQtDock:
 
         dock = self._inner_dock
         window = dock._window
-        area = dock._area
+        area = dock.area
 
         dock._stop_glue()
         dock._release_widget()
@@ -931,9 +1035,10 @@ class RightAreaQtDock:
                     if (
                         space is not None
                         and self._saved_header_flag is not None
-                        and bpy.context.window is not None
+                        and getattr(space, "show_region_header", None) != self._saved_header_flag
                     ):
-                        space.show_region_header = self._saved_header_flag
+                        with bpy.context.temp_override(window=window, screen=window.screen, area=area):
+                            space.show_region_header = self._saved_header_flag
                 except Exception:
                     pass
 

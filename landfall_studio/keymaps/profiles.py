@@ -39,6 +39,40 @@ _active_profile: str = "MAYA"
 _studio_keymaps: List[Tuple[Any, Any]] = []
 _muted_user_signatures: List[Tuple[str, str, str, str, bool, bool, bool, bool]] = []
 _added_shadows_intended: Set[Tuple[str, str, bool, bool, bool]] = set()
+_input_preferences_backup: Dict[str, Any] = {}
+_profile_mutes: list = []
+
+
+def reapply_profile_mutes(context=None) -> None:
+    """Reapply ownership after a native rebuild without replacing live keymaps."""
+    context = context or bpy.context
+    for km_name, key_type, ctrl, alt, shift in _profile_mutes:
+        _mute_conflicting_user_items(context, km_name, key_type, ctrl=ctrl, alt=alt, shift=shift)
+    _wake_studio_user_items(context)
+    if _sculpt_transforms_wanted:
+        sync_sculpt_transforms(True)
+    if _sculpt_keymaps:
+        _refresh_sculpt_mutes()
+
+
+def _set_maya_navigation(context) -> None:
+    """Use Maya's horizontal dolly, without permanently changing user inputs."""
+    inputs = context.preferences.inputs
+    for name, value in {
+        "view_zoom_method": "DOLLY", "view_zoom_axis": "HORIZONTAL",
+        "invert_mouse_zoom": False, "invert_zoom_wheel": False,
+        "use_zoom_to_mouse": False,
+    }.items():
+        if hasattr(inputs, name):
+            _input_preferences_backup.setdefault(name, getattr(inputs, name))
+            if getattr(inputs, name) != value:
+                setattr(inputs, name, value)
+
+
+def _restore_navigation(context) -> None:
+    for name, value in _input_preferences_backup.items():
+        setattr(context.preferences.inputs, name, value)
+    _input_preferences_backup.clear()
 
 
 def get_active_profile() -> str:
@@ -143,6 +177,15 @@ def _mute_conflicting_user_items(
     was_dirty = bool(getattr(prefs, "is_dirty", False)) if prefs is not None else False
 
     for kmi in ukm.keymap_items:
+        if any(owned_km.name == km_name and owned.idname == kmi.idname and owned.compare(kmi)
+               for owned_km, owned in _studio_keymaps):
+            continue
+        # Keep upstream's own F binding mirrored. Muting it makes its healer
+        # rebuild the complete Mesh map repeatedly underneath modal tools.
+        if (kmi.idname == "view3d.view_selected" and key_type == "F") or (
+            kmi.idname == "wm.call_menu" and key_type == "BACK_SPACE"
+        ):
+            continue
         if (
             kmi.idname.startswith("landfall_studio.")
             or kmi.idname.startswith("landfall.")
@@ -265,7 +308,8 @@ def _add_kmi(
 ) -> Optional[Any]:
     if km_name in PROTECTED_KEYMAP_NAMES:
         raise ValueError(f"Refusing to bind '{idname}' inside protected keymap '{km_name}'")
-    km = kc.keymaps.new(name=km_name, space_type=space_type)
+    km = kc.keymaps.new(name=km_name, space_type=space_type,
+                       tool=km_name.startswith("3D View Tool:"))
     kmi = km.keymap_items.new(
         idname, key_type, value, ctrl=ctrl, alt=alt, shift=shift
     )
@@ -291,22 +335,262 @@ def remove_studio_keymaps(context=None) -> None:
     """Remove all Studio-registered keymap items and restore all muted native user keymap items."""
     if context is None:
         context = bpy.context
+    prefs = getattr(context, "preferences", None)
+    was_dirty = bool(getattr(prefs, "is_dirty", False)) if prefs is not None else False
+    try:
+        sync_sculpt_keymaps(False)
+        sync_sculpt_transforms(False)
 
-    for km, kmi in _studio_keymaps:
-        try:
-            km.keymap_items.remove(kmi)
-        except Exception:
-            pass
-    _studio_keymaps.clear()
+        for km, kmi in _studio_keymaps:
+            try:
+                km.keymap_items.remove(kmi)
+            except Exception:
+                pass
+        _studio_keymaps.clear()
+        _profile_mutes.clear()
 
-    lf_mod = landfall_bridge.get_module()
-    if lf_mod is not None and hasattr(lf_mod, "SHADOWS_INTENDED"):
-        for sig in _added_shadows_intended:
-            lf_mod.SHADOWS_INTENDED.discard(sig)
-    _added_shadows_intended.clear()
+        lf_mod = landfall_bridge.get_module()
+        if lf_mod is not None and hasattr(lf_mod, "SHADOWS_INTENDED"):
+            for sig in _added_shadows_intended:
+                lf_mod.SHADOWS_INTENDED.discard(sig)
+        _added_shadows_intended.clear()
 
-    _restore_muted_user_items(context)
-    _settle_keyconfigs(context)
+        _restore_muted_user_items(context)
+        _restore_navigation(context)
+        _settle_keyconfigs(context)
+    finally:
+        # Navigation restoration and the final keyconfig merge can dirty the
+        # preferences after individual mute helpers have restored their flag.
+        # Preserve the caller's state across this complete teardown operation.
+        if prefs is not None:
+            try:
+                prefs.is_dirty = was_dirty
+            except Exception:
+                pass
+
+
+# Sculpt is a deliberately scoped interaction mode owned by this same registry.
+# Native Sculpt bindings are restored immediately on leaving it or disabling pen
+# controls. Maya's object/component mappings never receive these bindings.
+_sculpt_keymaps = []
+_sculpt_muted = []
+_sculpt_signatures = set()
+_sculpt_transform_states=[]
+_sculpt_transforms_wanted=False
+_sculpt_pen_wanted=None
+_sculpt_user_repairs=set()
+_sculpt_modal_cancel=None
+
+def _sync_sculpt_modal_cancel(enabled):
+    """Route RMB to the native paint cancellation path during Sculpt Studio."""
+    global _sculpt_modal_cancel
+    config=bpy.context.window_manager.keyconfigs.user
+    km=config.keymaps.get('Paint Stroke Modal') if config else None
+    if km is None:return
+    if enabled and _sculpt_modal_cancel is None:
+        item=next((i for i in km.keymap_items if i.type=='RIGHTMOUSE' and i.value=='PRESS' and i.propvalue=='CANCEL'),None)
+        if item is not None:
+            _sculpt_modal_cancel=('existing',item.active);item.active=True
+        else:
+            km.keymap_items.new_modal('CANCEL','RIGHTMOUSE','PRESS',any=True)
+            _sculpt_modal_cancel=('added',None)
+    elif not enabled and _sculpt_modal_cancel is not None:
+        kind,was_active=_sculpt_modal_cancel
+        item=next((i for i in km.keymap_items if i.type=='RIGHTMOUSE' and i.value=='PRESS' and i.propvalue=='CANCEL'),None)
+        if item:
+            if kind=='added':km.keymap_items.remove(item)
+            else:item.active=was_active
+        _sculpt_modal_cancel=None
+
+
+def sync_sculpt_transforms(enabled):
+    """Maya marquee overrides share native transform tool maps with Sculpt.
+
+    Restore native transform drags for the duration of Sculpt mode, preserving
+    the exact Maya/Hybrid map state for when the artist returns.
+    """
+    global _sculpt_transforms_wanted
+    _sculpt_transforms_wanted=enabled
+    wm=bpy.context.window_manager
+    if not wm or not wm.keyconfigs.user:return
+    if not enabled:
+        for name,sig,was_active in _sculpt_transform_states:
+            for km in wm.keyconfigs.user.keymaps:
+                if km.name!=name:continue
+                for item in km.keymap_items:
+                    if _sculpt_item_signature(item)==sig:item.active=was_active
+        _sculpt_transform_states.clear()
+        return
+    known={(name,sig) for name,sig,_ in _sculpt_transform_states}
+    for km in wm.keyconfigs.user.keymaps:
+        if km.name not in ('3D View Tool: Move','3D View Tool: Rotate','3D View Tool: Scale'):continue
+        for item in km.keymap_items:
+            if item.idname not in ('transform.translate','transform.rotate','transform.resize'):continue
+            sig=_sculpt_item_signature(item)
+            if (km.name,sig) not in known:
+                _sculpt_transform_states.append((km.name,sig,item.active));known.add((km.name,sig))
+            if not item.active:item.active=True
+
+
+def _sculpt_item_signature(item):
+    properties=item.properties
+    return (item.idname,item.type,item.value,item.ctrl,item.shift,item.alt,item.oskey,item.any,
+            repr(sorted(properties.items())) if properties else '[]')
+
+
+def sculpt_mutes_item(km_name,item):
+    if not _sculpt_keymaps or (km_name not in ('Sculpt','3D View') and not km_name.startswith('3D View Tool: Sculpt')):
+        return False
+    if item.idname=='landfall_studio.marking_menu' and item.type=='RIGHTMOUSE':return True
+    if item.idname.startswith('landfall_studio.'): return False
+    if item.type=='LEFTMOUSE' and not _sculpt_pen_wanted:return False
+    if km_name=='3D View' and item.idname=='sculpt.brush_stroke' and getattr(item.properties,'ignore_background_click',False):return False
+    if km_name=='3D View':return item.type=='LEFTMOUSE' or (item.type in ('SPACE','TAB') and not (item.ctrl or item.alt or item.shift)) or (item.type=='RIGHTMOUSE' and not (item.ctrl or item.alt or item.shift))
+    return item.type=='LEFTMOUSE' or (item.type,item.ctrl,item.shift,item.alt) in _sculpt_signatures
+
+
+def _refresh_sculpt_mutes():
+    wm=bpy.context.window_manager
+    known={(name,sig) for name,sig,was_active in _sculpt_muted}
+    for km in wm.keyconfigs.user.keymaps:
+        for item in km.keymap_items:
+            if not _sculpt_pen_wanted and item.type=='LEFTMOUSE':
+                sig=_sculpt_item_signature(item)
+                original=next((was for name,saved,was in _sculpt_muted if name==km.name and saved==sig),None)
+                if original is not None:item.active=original
+            if not sculpt_mutes_item(km.name,item):continue
+            sig=_sculpt_item_signature(item)
+            if (km.name,sig) not in known:
+                _sculpt_muted.append((km.name,sig,item.active)); known.add((km.name,sig))
+            item.active=False
+    sync_sculpt_paint_mode()
+
+
+def sync_sculpt_paint_mode(context=None):
+    """Transform/SelectRect tools own drags; only Draw owns ordinary strokes."""
+    if not _sculpt_keymaps:return
+    context=context or bpy.context
+    # Blender may omit native-operator addon rows from the merged user map
+    # after an asset/mode transition. Reconcile only these scoped fallbacks.
+    addon=context.window_manager.keyconfigs.addon;user=context.window_manager.keyconfigs.user
+    source=addon.keymaps.get('3D View') if addon else None
+    target=user.keymaps.get('3D View') if user else None
+    was_dirty=context.preferences.is_dirty;repaired=False
+    if source and target:
+        originals=[i for i in source.keymap_items if i.idname=='sculpt.brush_stroke' and getattr(i.properties,'ignore_background_click',False)]
+        for item in originals:
+            sig=_sculpt_item_signature(item)
+            if any(_sculpt_item_signature(i)==sig for i in target.keymap_items):continue
+            copy=target.keymap_items.new(item.idname,item.type,item.value,ctrl=item.ctrl,shift=item.shift,alt=item.alt)
+            for field in ('mode','brush_toggle','ignore_background_click'):setattr(copy.properties,field,getattr(item.properties,field))
+            copy.active=item.active;_sculpt_user_repairs.add(_sculpt_item_signature(copy))
+            repaired=True
+    if repaired and not was_dirty:
+        try:context.preferences.is_dirty=False
+        except Exception:pass
+    tool=None
+    for window in context.window_manager.windows:
+        tool=window.workspace.tools.from_space_view3d_mode('SCULPT',create=False)
+        if tool:break
+    drawing=not tool or tool.idname=='builtin.brush' or tool.idname.startswith('builtin_brush.')
+    for config in (context.window_manager.keyconfigs.addon,context.window_manager.keyconfigs.user):
+        km=config.keymaps.get('3D View') if config else None
+        if km:
+            for item in km.keymap_items:
+                if item.idname=='sculpt.brush_stroke' and getattr(item.properties,'ignore_background_click',False):
+                    enabled=bool(_sculpt_pen_wanted) and (bool(item.ctrl) or drawing)
+                    if item.active!=enabled:item.active=enabled
+
+
+def sync_sculpt_keymaps(enabled):
+    global _sculpt_pen_wanted
+    pen=bool(getattr(getattr(bpy.context.scene,'landfall_sculpt',None),'bbrush_enabled',False))
+    if enabled and _sculpt_keymaps and pen!=_sculpt_pen_wanted:
+        _sculpt_pen_wanted=pen
+        for config in (bpy.context.window_manager.keyconfigs.addon,bpy.context.window_manager.keyconfigs.user):
+            km=config.keymaps.get('Sculpt') if config else None
+            if km:
+                for item in km.keymap_items:
+                    if item.idname=='landfall_studio.sculpt_pen':item.active=pen
+        _refresh_sculpt_mutes()
+    if not enabled:
+        had_keys=bool(_sculpt_keymaps)
+        _sync_sculpt_modal_cancel(False)
+        for name in {entry[0] for entry in _sculpt_keymaps}:
+            km=bpy.context.window_manager.keyconfigs.addon.keymaps.get(name)
+            if km is None:continue
+            # Keyconfig updates can renumber native item IDs. Find a fresh
+            # owned item each time; never remove another owner's item by an
+            # ID/pointer captured before that update.
+            while True:
+                item=next((i for i in km.keymap_items if i.idname in ('landfall_studio.sculpt_pen','landfall_studio.sculpt_shortcut')
+                    or (name=='3D View' and i.idname=='sculpt.brush_stroke' and getattr(i.properties,'ignore_background_click',False))),None)
+                if item is None:break
+                km.keymap_items.remove(item)
+        _sculpt_keymaps.clear()
+        target=bpy.context.window_manager.keyconfigs.user.keymaps.get('3D View')
+        if target:
+            for item in list(target.keymap_items):
+                if _sculpt_item_signature(item) in _sculpt_user_repairs:target.keymap_items.remove(item)
+        _sculpt_user_repairs.clear()
+        if had_keys:_settle_keyconfigs(bpy.context)
+        # Upstream repair can rebuild user keymaps. Restore current entries by
+        # value; never keep Blender RNA item pointers across a native rebuild.
+        wm=bpy.context.window_manager
+        for name,sig,was_active in _sculpt_muted:
+            km=wm.keyconfigs.user.keymaps.get(name) if wm and wm.keyconfigs.user else None
+            if km:
+                for item in km.keymap_items:
+                    if _sculpt_item_signature(item)==sig:item.active=was_active
+        _sculpt_muted.clear()
+        _sculpt_signatures.clear()
+        _sculpt_pen_wanted=None
+        return
+    wm=bpy.context.window_manager
+    if not wm or not wm.keyconfigs.addon: return
+    if _sculpt_keymaps: return
+    _sculpt_pen_wanted=pen
+    km=wm.keyconfigs.addon.keymaps.new(name='Sculpt',space_type='EMPTY')
+    # Append in stable order. Inserting at the head renumbers user-map IDs
+    # during Blender's merge and can attach native mute diffs to other keys.
+    click=km.keymap_items.new('landfall_studio.sculpt_pen','LEFTMOUSE','CLICK',any=True)
+    _sculpt_keymaps.append((km.name,click.id))
+    mouse=km.keymap_items.new('landfall_studio.sculpt_pen','LEFTMOUSE','PRESS',any=True)
+    _sculpt_keymaps.append((km.name,mouse.id))
+    click.active=mouse.active=pen
+    keys=[('SPACE','QUICK',False,False),('TAB','FOCUS_UI',False,False),('RIGHTMOUSE','QUICK_STICKY',False,False),
+          ('B','PALETTE',False,False),('S','draw_size',False,False),('U','z_intensity',False,False),('O','focal_shift',False,False),
+          ('I','z_intensity',False,False),
+          *[(k,k,False,False) for k in ('Q','W','E','R','X','L','K','P','F')],
+          ('F','POLYFRAME',False,True),('D','DIVIDE',True,False),('D','LOWER',False,True),('D','HIGHER',False,False),
+          ('W','GROUP',True,False),('NUMPAD_PLUS','GROW',True,False),('NUMPAD_MINUS','SHRINK',True,False),
+          ('UP_ARROW','CONTRAST_UP',True,False),('DOWN_ARROW','CONTRAST_DOWN',True,False),('SLASH','K',False,True)]
+    for key,action,ctrl,shift in keys:
+        item=km.keymap_items.new('landfall_studio.sculpt_shortcut',key,'PRESS',ctrl=ctrl,shift=shift)
+        item.properties.action=action
+        _sculpt_keymaps.append((km.name,item.id)); _sculpt_signatures.add((key,ctrl,shift,False))
+    release=km.keymap_items.new('landfall_studio.sculpt_shortcut','SPACE','RELEASE')
+    release.properties.action='QUICK_RELEASE';_sculpt_keymaps.append((km.name,release.id))
+    # Native brush entries in Sculpt are merged ahead of Python entries even
+    # when appended. Put painting in the lower-priority 3D View map, after the
+    # classifier. Its poll restricts it to Sculpt. Scoped mouse mutes prevent
+    # generic viewport selection/navigation from intercepting this fallback.
+    paint_km=wm.keyconfigs.addon.keymaps.new(name='3D View',space_type='VIEW_3D')
+    for ctrl,shift,alt,value,mode,toggle in (
+        (False,False,False,'PRESS','NORMAL','None'),
+        (False,False,True,'PRESS','INVERT','None'),
+        (False,True,False,'PRESS','NORMAL','SMOOTH'),
+        (False,True,True,'PRESS','NORMAL','SMOOTH'),
+        (True,False,False,'CLICK_DRAG','NORMAL','MASK'),
+        (True,False,True,'CLICK_DRAG','INVERT','MASK')):
+        fallback=paint_km.keymap_items.new('sculpt.brush_stroke','LEFTMOUSE',value,ctrl=ctrl,shift=shift,alt=alt)
+        fallback.properties.mode=mode; fallback.properties.brush_toggle=toggle
+        fallback.properties.ignore_background_click=True
+        fallback.active=pen
+        _sculpt_keymaps.append((paint_km.name,fallback.id))
+    _settle_keyconfigs(bpy.context)
+    _refresh_sculpt_mutes()
+    _sync_sculpt_modal_cancel(True)
 
 
 def apply_profile(context=None, profile: str = "MAYA") -> Dict[str, Any]:
@@ -397,6 +681,7 @@ def _apply_profile_unguarded(context, profile: str) -> Dict[str, Any]:
 
     # --- MAYA PROFILE ---
     _active_profile = "MAYA"
+    _set_maya_navigation(context)
     if p is not None:
         p.interaction_profile = "MAYA"
 
@@ -433,6 +718,42 @@ def _apply_profile_unguarded(context, profile: str) -> Dict[str, Any]:
         mutes_to_apply.append((km_name, key_type, ctrl, alt, shift))
 
     if kc is not None:
+        _queue_mute("Object Mode", "D", ctrl=True)
+        _add_kmi(kc, "Object Mode", "EMPTY", "landfall_studio.duplicate_objects", "D", ctrl=True, props={'linked':False})
+        # Ctrl+G / Ctrl+Shift+G -> Maya Group / Ungroup (Blender: collection add/remove)
+        _queue_mute("Object Mode", "G", ctrl=True)
+        _add_kmi(kc, "Object Mode", "EMPTY", "landfall_studio.group_objects", "G", ctrl=True)
+        _queue_mute("Object Mode", "G", ctrl=True, shift=True)
+        _add_kmi(kc, "Object Mode", "EMPTY", "landfall_studio.ungroup_objects", "G", ctrl=True, shift=True)
+        # Ctrl+F9/F10/F11 -> Maya convert selection to vertices / edges / faces
+        for fkey, target in (("F9", "VERT"), ("F10", "EDGE"), ("F11", "FACE")):
+            _queue_mute("Mesh", fkey, ctrl=True)
+            _add_kmi(kc, "Mesh", "EMPTY", "landfall_studio.convert_selection", fkey,
+                     ctrl=True, props={"target": target})
+        _queue_mute("Object Mode", "S")
+        _add_kmi(kc, "Object Mode", "EMPTY", "landfall_studio.set_key", "S")
+        for km_name, space_type in (("3D View", "VIEW_3D"),) + MAYA_MODE_KEYMAPS:
+            _queue_mute(km_name, "Z")
+            _queue_mute(km_name, "Z", shift=True)
+            _add_kmi(kc, km_name, space_type, "ed.undo", "Z")
+            _add_kmi(kc, km_name, space_type, "ed.redo", "Z", shift=True)
+        for tool_map in ("3D View Tool: Select Box", "3D View Tool: Select Box (fallback)",
+                         "3D View Tool: Move", "3D View Tool: Rotate", "3D View Tool: Scale"):
+            for ctrl, shift, action in ((False, False, "SET"), (False, True, "ADD"),
+                                         (True, False, "SUB"), (True, True, "ADD")):
+                _add_kmi(kc, tool_map, "VIEW_3D", "landfall_studio.maya_box_select",
+                         "LEFTMOUSE", "CLICK_DRAG", ctrl=ctrl, shift=shift, props={"mode": action})
+        for shift, action in ((False, "REMOVE"), (True, "ADD")):
+            _add_kmi(kc, "3D View", "VIEW_3D", "landfall_studio.maya_select",
+                     "LEFTMOUSE", ctrl=True, shift=shift, props={"action": action})
+        # Blender's global W (cycle Select tools) is processed before the mode
+        # keymaps. Own Q/W/E/R here too, with the operator polling the supported
+        # viewport modes; protected sculpt/paint/editor maps keep their inputs.
+        for key_type, tool_mode in (("Q", "SELECT"), ("W", "TRANSLATE"),
+                                    ("E", "ROTATE"), ("R", "RESIZE")):
+            _add_kmi(kc, "3D View", "VIEW_3D", "landfall_studio.select_tool",
+                     key_type, props={"tool": tool_mode})
+
         # 1. 3D View global Maya shortcuts: F8–F12 component modes + Alt+V playback
         for fkey, cmode in (
             ("F8", "TOGGLE"),
@@ -741,29 +1062,23 @@ def _apply_profile_unguarded(context, profile: str) -> Dict[str, Any]:
             props={"mode": "XRAY"},
         )
 
-        # Ctrl+E -> Landfall Extrude, Shift+F -> Make Edge/Face (re-homed from F) in Mesh Edit Mode
+        # Ctrl+E -> Maya extrude: faces open the polyExtrudeFace caddy with a
+        # normal-aligned manipulator; edges/vertices fall back to Landfall's drag.
         _queue_mute("Mesh", "E", ctrl=True)
         _add_kmi(
             kc,
             "Mesh",
             "EMPTY",
-            "landfall.extrude",
+            "landfall_studio.maya_extrude",
             "E",
             "PRESS",
             ctrl=True,
         )
-        _queue_mute("Mesh", "F", shift=True)
-        _add_kmi(
-            kc,
-            "Mesh",
-            "EMPTY",
-            "mesh.edge_face_add",
-            "F",
-            "PRESS",
-            shift=True,
-        )
+        # Upstream Landfall already owns Shift+F. Keep its mirrored binding
+        # active so its keymap healer does not repeatedly rebuild this map.
 
     _settle_keyconfigs(context)
+    _profile_mutes[:] = mutes_to_apply
     for km_name, key_type, ctrl, alt, shift in mutes_to_apply:
         _mute_conflicting_user_items(
             context, km_name, key_type, ctrl=ctrl, alt=alt, shift=shift

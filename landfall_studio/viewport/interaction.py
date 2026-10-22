@@ -57,9 +57,28 @@ def get_pivot_modal_state() -> Dict[str, Any]:
 
 
 def apply_gizmo_for_tool(context, tool: str) -> Tuple[bool, bool, bool]:
-    """Apply the persistent transform gizmo flags for `tool` across 3D Viewports."""
+    """Activate the real viewport tool as well as its persistent manipulator."""
     norm = (tool or "TRANSLATE").upper()
     flags = TOOL_TO_GIZMO_FLAGS.get(norm, (True, False, False))
+
+    # Flags alone leave Blender's previous tool (often Select Box) active. The
+    # active tool owns drag handling and its own keymap, so it must agree with
+    # the Studio tool shown in the shelf and Channel Box.
+    native_tool = {"SELECT": "builtin.select_box", "TRANSLATE": "builtin.move",
+                   "ROTATE": "builtin.rotate", "RESIZE": "builtin.scale"}.get(norm)
+    if native_tool and not bpy.app.background:
+        for win in context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type != "VIEW_3D":
+                    continue
+                region = next((r for r in area.regions if r.type == "WINDOW"), None)
+                if region is None:
+                    continue
+                with context.temp_override(window=win, screen=win.screen, area=area, region=region):
+                    if context.mode in {"OBJECT", "EDIT_MESH", "POSE"}:
+                        active = win.workspace.tools.from_space_view3d_mode(context.mode, create=False)
+                        if active is None or active.idname != native_tool:
+                            bpy.ops.wm.tool_set_by_id(name=native_tool)
 
     lf_mod = landfall_bridge.get_module()
     if lf_mod is not None:
@@ -321,12 +340,130 @@ def compute_pivot_snap_target(
     return mw.translation.copy()
 
 
+def _refresh_help_line() -> None:
+    """Update the Help Line (bottom bar) for the newly active tool."""
+    try:
+        from ..ui import time_slider
+
+        time_slider.refresh_time_slider_widgets()
+    except Exception:
+        pass
+
+
+_last_marquee = {}
+
+
+class LANDFALL_STUDIO_OT_set_key(bpy.types.Operator):
+    """Set transform keys on the selected objects (Maya S)."""
+    bl_idname = "landfall_studio.set_key"
+    bl_label = "Set Key"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == "OBJECT" and bool(context.selected_objects)
+
+    def execute(self, context):
+        keyed = 0
+        for obj in context.selected_objects:
+            if obj.library is not None:
+                continue
+            rotation = "rotation_quaternion" if obj.rotation_mode == "QUATERNION" else (
+                "rotation_axis_angle" if obj.rotation_mode == "AXIS_ANGLE" else "rotation_euler")
+            for path in ("location", rotation, "scale"):
+                obj.keyframe_insert(data_path=path, group="Transforms")
+            shape_keys = getattr(getattr(obj, "data", None), "shape_keys", None)
+            if shape_keys is not None:
+                from .. import character
+                for target in shape_keys.key_blocks[1:]:
+                    if "_tween_w" not in target.name:
+                        character.keyframe_shape_target(obj, target.name)
+            keyed += 1
+        return {"FINISHED"} if keyed else {"CANCELLED"}
+
+
+class LANDFALL_STUDIO_OT_maya_box_select(bpy.types.Operator):
+    """Marquee selection from any Maya tool; gizmo handlers keep transform drags."""
+    bl_idname = "landfall_studio.maya_box_select"
+    bl_label = "Maya Marquee Selection"
+    mode: bpy.props.EnumProperty(items=tuple((v, v.title(), "") for v in ("SET", "ADD", "SUB", "XOR")))
+
+    @classmethod
+    def poll(cls, context):
+        return context.area is not None and context.area.type == "VIEW_3D" and context.mode in {"OBJECT", "EDIT_MESH"}
+
+    def invoke(self, context, event):
+        _last_marquee.update(mode=self.mode, finished=False)
+        self._x0 = event.mouse_prev_press_x - context.region.x
+        self._y0 = event.mouse_prev_press_y - context.region.y
+        self._x1, self._y1 = event.mouse_region_x, event.mouse_region_y
+        self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), "WINDOW", "POST_PIXEL")
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def _draw(self):
+        import gpu
+        from gpu_extras.batch import batch_for_shader
+        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        points = [(self._x0, self._y0), (self._x1, self._y0),
+                  (self._x1, self._y1), (self._x0, self._y1), (self._x0, self._y0)]
+        shader.bind()
+        shader.uniform_float("color", (0.22, 0.64, 0.85, 1.0))
+        batch_for_shader(shader, "LINE_STRIP", {"pos": points}).draw(shader)
+
+    def cancel(self, context):
+        if getattr(self, "_handle", None) is not None:
+            bpy.types.SpaceView3D.draw_handler_remove(self._handle, "WINDOW")
+            self._handle = None
+        context.area.tag_redraw()
+
+    def modal(self, context, event):
+        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+            self.cancel(context)
+            return {"CANCELLED"}
+        if event.type == "MOUSEMOVE":
+            self._x1, self._y1 = event.mouse_region_x, event.mouse_region_y
+            context.area.tag_redraw()
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            _last_marquee["finished"] = True
+            self.cancel(context)
+            # Execute with an explicit mode. Blender's generic box gesture
+            # interprets Shift/Ctrl itself; use our explicit selection policy.
+            return bpy.ops.view3d.select_box(
+                xmin=int(min(self._x0, self._x1)), xmax=int(max(self._x0, self._x1)),
+                ymin=int(min(self._y0, self._y1)), ymax=int(max(self._y0, self._y1)),
+                mode=self.mode, wait_for_input=False)
+        return {"RUNNING_MODAL"}
+
+
+class LANDFALL_STUDIO_OT_maya_select(bpy.types.Operator):
+    """Maya modifier selection: Ctrl removes; Ctrl+Shift adds without toggling."""
+    bl_idname = "landfall_studio.maya_select"
+    bl_label = "Maya Modified Selection"
+    bl_options = {"UNDO"}
+    action: bpy.props.EnumProperty(items=(("REMOVE", "Remove", ""), ("ADD", "Add", "")))
+
+    @classmethod
+    def poll(cls, context):
+        return context.area is not None and context.area.type == "VIEW_3D" and context.mode in {"OBJECT", "EDIT_MESH"}
+
+    def invoke(self, context, event):
+        return bpy.ops.view3d.select(
+            location=(event.mouse_region_x, event.mouse_region_y),
+            deselect=self.action == "REMOVE", extend=self.action == "ADD",
+            toggle=False, deselect_all=False, enumerate=False)
+
+
 class LANDFALL_STUDIO_OT_select_tool(bpy.types.Operator):
     """Select active Maya tool (`Q` Select, `W` Move, `E` Rotate, `R` Scale) with persistent manipulator."""
 
     bl_idname = "landfall_studio.select_tool"
     bl_label = "Select Maya Tool (Q/W/E/R)"
     bl_description = "Activate Select (Q), Move (W), Rotate (E), or Scale (R) persistent manipulator"
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode in {"OBJECT", "EDIT_MESH", "POSE"}
 
     tool: bpy.props.EnumProperty(
         name="Tool",
@@ -356,6 +493,7 @@ class LANDFALL_STUDIO_OT_select_tool(bpy.types.Operator):
         axis_arg = None if self.axis == "KEEP" else self.axis
         cmd_registry.set_active_tool(self.tool, axis=axis_arg)
         apply_gizmo_for_tool(context, self.tool)
+        _refresh_help_line()
         return {"FINISHED"}
 
 
@@ -973,15 +1111,9 @@ class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
             return False
 
     def _apply_delta(self, context, delta_val: float):
-        if self._has_selected_channels():
-            try:
-                from ..ui import channel_box_ext
-
-                res = channel_box_ext.scrub_selected_channels(delta_val)
-                if res.get("ok"):
-                    return
-            except Exception:
-                pass
+        session = getattr(self, '_channel_scrub', None)
+        if session is not None:
+            return session.apply(delta_val)
 
         tool = cmd_registry.get_active_tool()
         axis = cmd_registry.get_active_axis()
@@ -1035,10 +1167,9 @@ class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
                 else:
                     obj.location[idx] += delta_val
             elif tool == "ROTATE":
-                if axis == "VIEW":
-                    obj.rotation_euler.z += delta_val
-                else:
-                    obj.rotation_euler[idx] += delta_val
+                from ..modeling import rotation
+                component = 2 if axis == 'VIEW' else idx
+                rotation.set_component(obj, component, rotation.euler(obj)[component] + delta_val)
             elif tool == "RESIZE":
                 if axis == "VIEW":
                     obj.scale.x = max(0.001, obj.scale.x + delta_val)
@@ -1046,13 +1177,18 @@ class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
                     obj.scale.z = max(0.001, obj.scale.z + delta_val)
                 else:
                     obj.scale[idx] = max(0.001, obj.scale[idx] + delta_val)
+        return True
 
     def execute(self, context):
         tool = cmd_registry.get_active_tool()
         if tool == "SELECT" and not self._has_selected_channels():
             return {"CANCELLED"}
-        self._apply_delta(context, self.delta)
-        return {"FINISHED"}
+        from ..ui import channel_box_ext
+        has_cb = self._has_selected_channels()
+        self._channel_scrub = channel_box_ext.begin_channel_scrub() if has_cb else None
+        if has_cb and self._channel_scrub is None:
+            return {"CANCELLED"}
+        return {"FINISHED"} if self._apply_delta(context, self.delta) else {"CANCELLED"}
 
     def invoke(self, context, event):
         tool = cmd_registry.get_active_tool()
@@ -1067,6 +1203,12 @@ class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
         if not targets:
             return {"PASS_THROUGH"}
 
+        from ..ui import channel_box_ext
+        self._channel_scrub = channel_box_ext.begin_channel_scrub() if has_cb else None
+        if has_cb and self._channel_scrub is None:
+            return {"CANCELLED"}
+        self._moved = False
+
         self._start_x = event.mouse_region_x
         self._last_x = event.mouse_region_x
         self._snapshots = []
@@ -1079,17 +1221,20 @@ class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
                     edit_verts = [v.co.copy() for v in bm.verts]
                 except Exception:
                     edit_verts = None
-            self._snapshots.append(
-                (o, o.location.copy(), o.rotation_euler.copy(), o.scale.copy(), edit_verts)
-            )
+            from ..modeling import rotation
+            self._snapshots.append((o, o.location.copy(), rotation.snapshot(o), o.scale.copy(), edit_verts))
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
     def _rollback(self):
+        session = getattr(self, '_channel_scrub', None)
+        if session is not None:
+            session.restore()
         for o, loc, rot, sca, edit_verts in getattr(self, "_snapshots", []):
             try:
                 o.location = loc
-                o.rotation_euler = rot
+                from ..modeling import rotation
+                rotation.restore(o, rot)
                 o.scale = sca
                 if edit_verts is not None and getattr(o, "mode", "OBJECT") == "EDIT" and o.data is not None:
                     bm = bmesh.from_edit_mesh(o.data)
@@ -1113,15 +1258,20 @@ class LANDFALL_STUDIO_OT_mmb_virtual_slider(bpy.types.Operator):
                 mult *= 0.1
             elif event.shift:
                 mult *= 2.5
-            self._apply_delta(context, dx * mult)
+            if not self._apply_delta(context, dx * mult):
+                self._rollback()
+                return {"CANCELLED"}
+            self._moved = self._moved or bool(dx)
             if context.area:
                 context.area.tag_redraw()
             return {"RUNNING_MODAL"}
 
         if event.type == "MIDDLEMOUSE" and event.value == "RELEASE":
-            return {"FINISHED"}
+            session = getattr(self, '_channel_scrub', None)
+            changed = session.changed() if session is not None else self._moved
+            return {"FINISHED"} if changed else {"CANCELLED"}
 
-        if event.type in ("ESC", "RIGHTMOUSE") and event.value == "PRESS":
+        if (event.type in ("ESC", "RIGHTMOUSE") and event.value == "PRESS") or event.type == 'WINDOW_DEACTIVATE':
             self._rollback()
             if context.area:
                 context.area.tag_redraw()
@@ -1153,6 +1303,9 @@ class LANDFALL_STUDIO_OT_frame_all(bpy.types.Operator):
 
 
 INTERACTION_CLASSES = (
+    LANDFALL_STUDIO_OT_set_key,
+    LANDFALL_STUDIO_OT_maya_box_select,
+    LANDFALL_STUDIO_OT_maya_select,
     LANDFALL_STUDIO_OT_select_tool,
     LANDFALL_STUDIO_OT_select_last_tool,
     LANDFALL_STUDIO_OT_repeat_last_command,

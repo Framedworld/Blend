@@ -15,6 +15,7 @@ Synchronizes two-way with Blender's `scene.tool_settings` and Studio tool defaul
 
 from __future__ import annotations
 
+import weakref
 from typing import Any, Dict, Optional
 
 from .. import commands as cmd_registry
@@ -54,6 +55,18 @@ DEFAULT_OPTION_BOX_PARAMS: Dict[str, Any] = {
 
 _option_box_state: Dict[str, Any] = dict(DEFAULT_OPTION_BOX_PARAMS)
 _active_tool_context: str = "TRANSLATE"
+_ts_instances: weakref.WeakSet = weakref.WeakSet()
+
+
+# Display labels as Maya shows them; Blender's identifiers stay the data.
+PIVOT_LABELS = (("Median", "MEDIAN_POINT"), ("Active Element", "ACTIVE_ELEMENT"),
+                ("3D Cursor", "CURSOR"), ("Individual Origins", "INDIVIDUAL_ORIGINS"),
+                ("Bounding Box Center", "BOUNDING_BOX_CENTER"))
+FALLOFF_LABELS = (("Smooth", "SMOOTH"), ("Sphere", "SPHERE"), ("Root", "ROOT"),
+                  ("Inverse Square", "INVERSE_SQUARE"), ("Sharp", "SHARP"), ("Linear", "LINEAR"),
+                  ("Constant", "CONSTANT"), ("Random", "RANDOM"))
+TOOL_TITLES = {"TRANSLATE": "Move Tool", "MOVE": "Move Tool", "ROTATE": "Rotate Tool",
+               "RESIZE": "Scale Tool", "SCALE": "Scale Tool", "SELECT": "Select Tool"}
 
 
 def get_tool_settings_snapshot(context: Any = None) -> Dict[str, Any]:
@@ -169,6 +182,7 @@ def reset_tool_settings(tool_context: Optional[str] = None, context: Any = None)
             pass
     if ts is not None:
         ts.use_proportional_edit = False
+        ts.use_proportional_edit_objects = False
         ts.proportional_size = 1.0
         ts.proportional_edit_falloff = "SMOOTH"
         ts.transform_pivot_point = "MEDIAN_POINT"
@@ -192,6 +206,23 @@ def apply_current_tool_option_box() -> Dict[str, Any]:
     import bpy
 
     tc = (_active_tool_context or "TRANSLATE").upper()
+
+    def finish(result):
+        result.setdefault("executed", tc)
+        try:
+            from . import desktop
+
+            desktop.set_command_feedback(
+                f"tool_settings.apply('{tc}')",
+                "OK" if result.get("ok") else result.get("error", "Unable to apply options"),
+                level="INFO" if result.get("ok") else "WARNING",
+            )
+        except Exception:
+            pass
+        if result.get("ok"):
+            channel_box_ext.refresh_channel_box_extensions()
+        return result
+
     if tc in ("CUBE", "SPHERE", "CYLINDER", "PLANE", "POLY_CUBE", "POLY_SPHERE", "POLY_CYLINDER", "POLY_PLANE"):
         ptype = tc.replace("POLY_", "")
         res = channel_box_ext.create_maya_primitive(
@@ -204,27 +235,25 @@ def apply_current_tool_option_box() -> Dict[str, Any]:
             subdivisions_y=_option_box_state["prim_subdivisions_y"],
             subdivisions_z=_option_box_state["prim_subdivisions_z"],
         )
-        channel_box_ext.refresh_channel_box_extensions()
-        return {"ok": True, "executed": f"create_maya_primitive({ptype})", "result": res}
+        return finish({"ok": bool(res.get("ok")), "executed": f"create_maya_primitive({ptype})", "result": res,
+                       **({"error": res.get("error", "Primitive creation failed")} if not res.get("ok") else {})})
 
-    if tc == "BEVEL":
+    if tc in ("BEVEL", "EXTRUDE"):
+        from .. import modeling
+
         active = getattr(bpy.context.view_layer.objects, "active", None)
-        if active is not None and active.type == "MESH" and not channel_box_ext.is_datablock_linked(active):
-            mod = active.modifiers.new(name="polyBevel1", type="BEVEL")
-            mod.width = float(_option_box_state["bevel_width"])
-            mod.segments = int(_option_box_state["bevel_segments"])
-            channel_box_ext.refresh_channel_box_extensions()
-            return {"ok": True, "executed": "polyBevel1", "modifier": mod.name}
+        if active is None or active.type != "MESH":
+            return finish({"ok": False, "error": f"{tc.title()} requires an active mesh"})
+        if channel_box_ext.is_datablock_linked(active) or channel_box_ext.is_datablock_linked(active.data):
+            return finish({"ok": False, "error": "Linked mesh data is read-only"})
+        params = ({"width": float(_option_box_state["bevel_width"]), "segments": int(_option_box_state["bevel_segments"])}
+                  if tc == "BEVEL" else {"thickness": float(_option_box_state["extrude_offset"])})
+        try:
+            return finish(modeling.invoke_modeling_caddy(tc, target_obj_or_name=active, params_dict=params))
+        except (RuntimeError, ValueError, TypeError) as exc:
+            return finish({"ok": False, "error": str(exc)})
 
-    if tc == "EXTRUDE":
-        active = getattr(bpy.context.view_layer.objects, "active", None)
-        if active is not None and active.type == "MESH" and not channel_box_ext.is_datablock_linked(active):
-            mod = active.modifiers.new(name="polyExtrudeFace1", type="SOLIDIFY")
-            mod.thickness = float(_option_box_state["extrude_offset"])
-            channel_box_ext.refresh_channel_box_extensions()
-            return {"ok": True, "executed": "polyExtrudeFace1", "modifier": mod.name}
-
-    return {"ok": True, "executed": tc, "snapshot": get_tool_settings_snapshot()}
+    return finish({"ok": False, "error": f"No option-box action is available for {tc.title()}"})
 
 
 class MayaToolSettingsWidget:
@@ -265,9 +294,10 @@ class MayaToolSettingsWidget:
         self.cmb_orient.addItems(["World", "Object", "Component / Normal", "View", "Gimbal"])
         self.cmb_orient.currentTextChanged.connect(self._on_orient_changed)
         self.cmb_pivot = QtWidgets.QComboBox()
-        self.cmb_pivot.addItems(["MEDIAN_POINT", "ACTIVE_ELEMENT", "CURSOR", "INDIVIDUAL_ORIGINS"])
-        self.cmb_pivot.currentTextChanged.connect(
-            lambda txt: set_tool_setting("pivot_point", txt) if not self._updating else None
+        for label, value in PIVOT_LABELS:
+            self.cmb_pivot.addItem(label, value)
+        self.cmb_pivot.currentIndexChanged.connect(
+            lambda _i: set_tool_setting("pivot_point", self.cmb_pivot.currentData()) if not self._updating else None
         )
         self.chk_snap = QtWidgets.QCheckBox("Step / Discrete Snap")
         self.chk_snap.toggled.connect(
@@ -298,13 +328,15 @@ class MayaToolSettingsWidget:
         self.spn_soft_radius = QtWidgets.QDoubleSpinBox()
         self.spn_soft_radius.setRange(0.01, 500.0)
         self.spn_soft_radius.setSingleStep(0.25)
+        self.spn_soft_radius.setKeyboardTracking(False)
         self.spn_soft_radius.valueChanged.connect(
             lambda v: set_tool_setting("soft_select_radius", v) if not self._updating else None
         )
         self.cmb_falloff = QtWidgets.QComboBox()
-        self.cmb_falloff.addItems(["SMOOTH", "SPHERE", "ROOT", "INVERSE_SQUARE", "SHARP", "LINEAR"])
-        self.cmb_falloff.currentTextChanged.connect(
-            lambda txt: set_tool_setting("soft_select_falloff", txt) if not self._updating else None
+        for label, value in FALLOFF_LABELS:
+            self.cmb_falloff.addItem(label, value)
+        self.cmb_falloff.currentIndexChanged.connect(
+            lambda _i: set_tool_setting("soft_select_falloff", self.cmb_falloff.currentData()) if not self._updating else None
         )
         flay2.addRow("Enable:", self.chk_soft)
         flay2.addRow("Falloff Radius:", self.spn_soft_radius)
@@ -339,7 +371,7 @@ class MayaToolSettingsWidget:
         opt_hdr.setObjectName("MayaSectionHeader")
         orow = QtWidgets.QHBoxLayout(opt_hdr)
         orow.setContentsMargins(6, 2, 6, 2)
-        lbl_opt = QtWidgets.QLabel("COMMAND OPTION BOX (□)")
+        lbl_opt = QtWidgets.QLabel("OPTION BOX DEFAULTS (□)")
         lbl_opt.setObjectName("MayaSectionTitle")
         orow.addWidget(lbl_opt)
         vlay.addWidget(opt_hdr)
@@ -350,14 +382,17 @@ class MayaToolSettingsWidget:
         self.spn_bevel_w = QtWidgets.QDoubleSpinBox()
         self.spn_bevel_w.setRange(0.001, 50.0)
         self.spn_bevel_w.setSingleStep(0.05)
+        self.spn_bevel_w.setKeyboardTracking(False)
         self.spn_bevel_w.valueChanged.connect(lambda v: set_tool_setting("bevel_width", v) if not self._updating else None)
 
         self.spn_bevel_seg = QtWidgets.QSpinBox()
         self.spn_bevel_seg.setRange(1, 32)
+        self.spn_bevel_seg.setKeyboardTracking(False)
         self.spn_bevel_seg.valueChanged.connect(lambda v: set_tool_setting("bevel_segments", v) if not self._updating else None)
 
         self.spn_prim_subx = QtWidgets.QSpinBox()
         self.spn_prim_subx.setRange(1, 64)
+        self.spn_prim_subx.setKeyboardTracking(False)
         self.spn_prim_subx.valueChanged.connect(lambda v: set_tool_setting("prim_subdivisions_x", v) if not self._updating else None)
 
         flay3.addRow("Bevel Width:", self.spn_bevel_w)
@@ -366,11 +401,13 @@ class MayaToolSettingsWidget:
         vlay.addWidget(grp_opt)
 
         act_row = QtWidgets.QHBoxLayout()
-        self.btn_apply = QtWidgets.QPushButton("Apply Option Box")
+        self.btn_apply = QtWidgets.QPushButton("Apply")
+        self.btn_apply.setToolTip("Run the current command with these option box values")
         self.btn_apply.clicked.connect(lambda: apply_current_tool_option_box())
         act_row.addWidget(self.btn_apply)
         vlay.addLayout(act_row)
         vlay.addStretch(1)
+        _ts_instances.add(self)
 
     def _on_orient_changed(self, txt: str) -> None:
         if self._updating:
@@ -385,22 +422,42 @@ class MayaToolSettingsWidget:
         set_tool_setting("axis_orientation", rev.get(txt, "WORLD"))
 
     def refresh(self) -> Dict[str, Any]:
+        from qtpy import QtWidgets
+
         snap = get_tool_settings_snapshot()
+
+        def sync(control, value, method="setValue"):
+            focus = QtWidgets.QApplication.focusWidget()
+            if control.hasFocus() or (focus is not None and control.isAncestorOf(focus)):
+                return
+            if isinstance(control, QtWidgets.QComboBox) and control.view().isVisible():
+                return
+            if method == "setData":
+                index = control.findData(value)
+                if index >= 0 and index != control.currentIndex():
+                    control.setCurrentIndex(index)
+                return
+            current = control.currentText() if method == "setCurrentText" else control.value()
+            if current == value:
+                return
+            getattr(control, method)(value)
+
         self._updating = True
         try:
-            self.lbl_title.setText(f"TOOL SETTINGS: {snap['tool_context']}")
-            self.cmb_orient.setCurrentText(snap["axis_orientation_maya"])
-            self.cmb_pivot.setCurrentText(snap["pivot_point"])
+            self.lbl_title.setText(TOOL_TITLES.get(str(snap['tool_context']).upper(),
+                                                   f"{str(snap['tool_context']).replace('_', ' ').title()} Tool"))
+            sync(self.cmb_orient, snap["axis_orientation_maya"], "setCurrentText")
+            sync(self.cmb_pivot, snap["pivot_point"], "setData")
             self.chk_snap.setChecked(snap["snap_enabled"])
             self.chk_soft.setChecked(snap["soft_select_enabled"])
-            self.spn_soft_radius.setValue(snap["soft_select_radius"])
-            self.cmb_falloff.setCurrentText(snap["soft_select_falloff"])
+            sync(self.spn_soft_radius, snap["soft_select_radius"])
+            sync(self.cmb_falloff, snap["soft_select_falloff"], "setData")
             self.chk_sym_x.setChecked(snap["symmetry"]["x"])
             self.chk_sym_y.setChecked(snap["symmetry"]["y"])
             self.chk_sym_z.setChecked(snap["symmetry"]["z"])
-            self.spn_bevel_w.setValue(snap["option_box"]["bevel_width"])
-            self.spn_bevel_seg.setValue(snap["option_box"]["bevel_segments"])
-            self.spn_prim_subx.setValue(snap["option_box"]["prim_subdivisions_x"])
+            sync(self.spn_bevel_w, snap["option_box"]["bevel_width"])
+            sync(self.spn_bevel_seg, snap["option_box"]["bevel_segments"])
+            sync(self.spn_prim_subx, snap["option_box"]["prim_subdivisions_x"])
         except Exception:
             pass
         finally:
@@ -430,17 +487,25 @@ def ensure_tool_settings_widget(tool_context: Optional[str] = None) -> Optional[
 
 
 def refresh_tool_settings_widget() -> Optional[Dict[str, Any]]:
-    if _ts_instance is not None:
-        return _ts_instance.refresh()
-    return None
+    result = None
+    for controller in list(_ts_instances):
+        try:
+            controller.widget.objectName()
+            snap = controller.refresh()
+            if controller is _ts_instance or result is None:
+                result = snap
+        except RuntimeError:
+            _ts_instances.discard(controller)
+    return result
 
 
 def teardown_tool_settings() -> None:
     global _ts_instance
-    if _ts_instance is not None:
+    for controller in list(_ts_instances):
         try:
-            _ts_instance.widget.hide()
-            _ts_instance.widget.deleteLater()
+            controller.widget.hide()
+            controller.widget.deleteLater()
         except Exception:
             pass
-        _ts_instance = None
+    _ts_instances.clear()
+    _ts_instance = None

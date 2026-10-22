@@ -200,7 +200,7 @@ class TestPhase10ModernMayaPolishHeadless(unittest.TestCase):
         self.assertEqual(ws_std["right_dock_mode"], "CHANNEL_BOX")
         self.assertEqual(
             set(ws_std["visible_spine_tabs"]),
-            {"CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS"},
+            {"CHANNEL_BOX", "MODELING_TOOLKIT", "ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "MODIFIER_STACK"},
         )
 
 

@@ -155,7 +155,11 @@ class TestPhase09Headless(unittest.TestCase):
         # 3. UV Editor bridge & return to Object Mode
         bpy.context.view_layer.objects.active = cube
         uv = continuity.open_native_editor_or_mode("UV_EDITOR")
-        self.assertTrue(uv["ok"])
+        # A real UV window cannot open headlessly. Require the component-mode
+        # contract here; the native full UX file suite verifies the actual window.
+        self.assertFalse(uv["ok"])
+        self.assertFalse(uv.get('editor_opened',False))
+        self.assertTrue(uv.get('error'))
         self.assertEqual(uv["mode_after"], "EDIT_MESH")
         continuity.open_native_editor_or_mode("OBJECT_MODE")
 

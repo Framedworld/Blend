@@ -15,7 +15,20 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 from .. import advanced
-from . import style
+from . import channel_box_ext, style
+from ..commands import scene_edits
+
+
+def _material_value(mat,key):
+    socket={'metallic':'Metallic','roughness':'Roughness','coat_weight':'Coat Weight','emission_strength':'Emission Strength'}[key]
+    if mat.use_nodes and mat.node_tree:
+        node=next((n for n in mat.node_tree.nodes if n.type=='BSDF_PRINCIPLED'),None)
+        if node:return float(node.inputs[socket].default_value)
+    return float(getattr(mat,key,0.0))
+
+
+def _material_edit_state(mat,key):
+    return mat.use_nodes,mat.roughness,mat.metallic,_material_value(mat,key)
 
 _hypershade_widgets: List[Any] = []
 
@@ -133,9 +146,12 @@ def create_hypershade_widget() -> Any:
             style.apply_studio_style(self)
             self._updating = False
             self._selected_mat_name = ""
+            self._selected_material = None
+            self._slider_drag_owner = None
             self._build_ui()
             if self not in _hypershade_widgets:
                 _hypershade_widgets.append(self)
+            self.destroyed.connect(lambda *_: _hypershade_widgets.remove(self) if self in _hypershade_widgets else None)
             self.refresh_from_scene()
 
         def _build_ui(self) -> None:
@@ -159,7 +175,7 @@ def create_hypershade_widget() -> Any:
             self.lbl_mat_badge = QtWidgets.QLabel("0 Shaders")
             self.lbl_mat_badge.setStyleSheet(
                 "background-color: #1B3022; color: #3FB950; border: 1px solid #2A5A38; "
-                "border-radius: 8px; padding: 1px 7px; font-size: 9px; font-weight: 700;"
+                "border-radius: 8px; padding: 1px 7px; font-size: 10px; font-weight: 700;"
             )
             hlay.addWidget(self.lbl_mat_badge)
             vlay.addWidget(head)
@@ -171,7 +187,7 @@ def create_hypershade_widget() -> Any:
             blay = QtWidgets.QHBoxLayout(sec_bin)
             blay.setContentsMargins(8, 0, 8, 0)
             lbl_bin = QtWidgets.QLabel("▾  SCENE MATERIALS (SWATCH BIN)")
-            lbl_bin.setStyleSheet("color: #A6B0BD; font-weight: 700; font-size: 9px; letter-spacing: 0.6px;")
+            lbl_bin.setStyleSheet("color: #A6B0BD; font-weight: 700; font-size: 10px; letter-spacing: 0.6px;")
             blay.addWidget(lbl_bin)
             blay.addStretch(1)
 
@@ -180,6 +196,7 @@ def create_hypershade_widget() -> Any:
             btn_graph.setFixedHeight(17)
             btn_graph.setToolTip("Open Blender's native Shader Editor focused on the selected material's node graph")
             btn_graph.clicked.connect(self._on_graph_selected)
+            self.btn_graph = btn_graph
             blay.addWidget(btn_graph)
             vlay.addWidget(sec_bin)
 
@@ -240,7 +257,7 @@ def create_hypershade_widget() -> Any:
             tlay = QtWidgets.QHBoxLayout(sec_tpl)
             tlay.setContentsMargins(8, 0, 8, 0)
             lbl_tpl = QtWidgets.QLabel("▾  CREATE MAYA SHADER PRESET (AISTANDARDSURFACE)")
-            lbl_tpl.setStyleSheet("color: #A6B0BD; font-weight: 700; font-size: 9px; letter-spacing: 0.6px;")
+            lbl_tpl.setStyleSheet("color: #A6B0BD; font-weight: 700; font-size: 10px; letter-spacing: 0.6px;")
             tlay.addWidget(lbl_tpl)
             vlay.addWidget(sec_tpl)
 
@@ -274,8 +291,8 @@ def create_hypershade_widget() -> Any:
             sec_prm.setFixedHeight(22)
             play = QtWidgets.QHBoxLayout(sec_prm)
             play.setContentsMargins(8, 0, 8, 0)
-            self.lbl_active_shader = QtWidgets.QLabel("▾  SHADER ATTRIBUTES: (None)")
-            self.lbl_active_shader.setStyleSheet("color: #A6B0BD; font-weight: 700; font-size: 9px; letter-spacing: 0.6px;")
+            self.lbl_active_shader = style.elided_label("▾  SHADER ATTRIBUTES: (None)")
+            self.lbl_active_shader.setStyleSheet("color: #A6B0BD; font-weight: 700; font-size: 10px; letter-spacing: 0.6px;")
             play.addWidget(self.lbl_active_shader)
             vlay.addWidget(sec_prm)
 
@@ -298,7 +315,8 @@ def create_hypershade_widget() -> Any:
             ):
                 lbl = QtWidgets.QLabel(p_lbl)
                 lbl.setStyleSheet("color: #9AA2AE; font-size: 10px;")
-                sld = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+                from .sculpt_input import slider
+                sld = slider()
                 sld.setRange(0, p_max)
                 sld.setFixedHeight(16)
                 vlbl = QtWidgets.QLabel("0.00")
@@ -306,6 +324,8 @@ def create_hypershade_widget() -> Any:
                 vlbl.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 vlbl.setStyleSheet("color: #69B8DC; font-family: 'Consolas', monospace; font-size: 10px; font-weight: 700;")
                 sld.valueChanged.connect(lambda val, pk=p_key: self._on_slider_changed(pk, val / 100.0))
+                sld.sliderPressed.connect(lambda pk=p_key: self._begin_slider_drag(pk))
+                sld.sliderReleased.connect(self._end_slider_drag)
                 prm_lay.addWidget(lbl, row_idx, 0)
                 prm_lay.addWidget(sld, row_idx, 1)
                 prm_lay.addWidget(vlbl, row_idx, 2)
@@ -320,7 +340,7 @@ def create_hypershade_widget() -> Any:
             xlay = QtWidgets.QHBoxLayout(sec_tex)
             xlay.setContentsMargins(8, 0, 8, 0)
             lbl_tex = QtWidgets.QLabel("▾  FILE TEXTURES & UDIM PATH AUDIT")
-            lbl_tex.setStyleSheet("color: #A6B0BD; font-weight: 700; font-size: 9px; letter-spacing: 0.6px;")
+            lbl_tex.setStyleSheet("color: #A6B0BD; font-weight: 700; font-size: 10px; letter-spacing: 0.6px;")
             xlay.addWidget(lbl_tex)
             vlay.addWidget(sec_tex)
 
@@ -350,23 +370,75 @@ def create_hypershade_widget() -> Any:
             mname = self._current_mat_name()
             if not mname:
                 return
+            gesture=getattr(self,'_material_gesture',None)
+            if gesture and gesture.active and self._slider_drag_owner and self._slider_drag_owner[0].name!=mname:
+                gesture.cancel()
             self._selected_mat_name = mname
             self._sync_parameter_sliders(mname)
 
-        def _sync_parameter_sliders(self, mat_name: str) -> None:
-            mats = advanced.list_scene_materials()
-            rec = next((m for m in mats if m["name"] == mat_name), None)
-            if rec is None:
-                return
+        def _sync_parameter_sliders(self, mat_name: str, rec=None) -> None:
+            import bpy
+
+            if rec is None and mat_name:
+                rec = next((m for m in advanced.list_scene_materials() if m["name"] == mat_name), None)
+            mat = bpy.data.materials.get(mat_name) if rec is not None else None
+            self._selected_material = mat
+            editable = mat is not None and not channel_box_ext.is_datablock_linked(mat)
+            if mat is not None and mat.use_nodes:
+                editable = editable and mat.node_tree is not None and any(node.type == "BSDF_PRINCIPLED" for node in mat.node_tree.nodes)
+            previous = self._updating
             self._updating = True
             try:
-                self.lbl_active_shader.setText(f"▾  SHADER ATTRIBUTES: {mat_name}")
+                self.lbl_active_shader.setText(f"▾  SHADER ATTRIBUTES: {mat_name}" if mat is not None else "▾  SHADER ATTRIBUTES: (No Material)")
+                for button in (self.btn_assign, self.btn_sel_objs, self.btn_graph):
+                    button.setEnabled(mat is not None)
                 for pk in ("metallic", "roughness", "coat_weight", "emission_strength"):
-                    val = float(rec.get(pk, 0.0))
-                    self._sliders[pk].setValue(int(round(val * 100.0)))
+                    val = float(rec.get(pk, 0.0)) if rec is not None else 0.0
+                    slider = self._sliders[pk]
+                    slider.setEnabled(editable)
+                    if not slider.isSliderDown():
+                        slider.setMaximum(max(200 if pk == "emission_strength" else 100, int(round(val * 100.0))))
+                        slider.setValue(int(round(val * 100.0)))
                     self._val_labels[pk].setText(f"{val:.2f}")
             finally:
-                self._updating = False
+                self._updating = previous
+
+        def _begin_slider_drag(self, param_key: str) -> None:
+            self._slider_drag_owner = (self._selected_material, param_key)
+            mat=self._selected_material
+            original_value=_material_value(mat,param_key)
+            original_roughness,original_metallic=mat.roughness,mat.metallic
+            has_nodes=mat.use_nodes
+            def preview(value):
+                # A legacy material has no shader to preview. Defer node creation
+                # until the one final commit so Escape never leaves a new tree.
+                if not has_nodes:return
+                result=advanced.set_material_parameter(mat.name,param_key,value)
+                if value==original_value:
+                    mat.roughness,mat.metallic=original_roughness,original_metallic
+                return result
+            self._material_gesture=scene_edits.ValueGesture('Shader '+param_key,
+                lambda:_material_value(mat,param_key),
+                lambda value:advanced.set_material_parameter(mat.name,param_key,value),self._sliders[param_key],
+                preview_write=preview,read_state=lambda:_material_edit_state(mat,param_key),
+                on_cancel=self._cancel_slider_drag,on_abandon=lambda:self._cancel_slider_drag(False))
+
+        def _cancel_slider_drag(self, refresh=True) -> None:
+            owner=self._slider_drag_owner
+            self._material_gesture=None
+            self._slider_drag_owner=None
+            if owner:
+                guard=QtCore.QSignalBlocker(self._sliders[owner[1]])
+                self._sliders[owner[1]].setSliderDown(False)
+                del guard
+            if refresh:self.refresh_from_scene()
+
+        def _end_slider_drag(self) -> None:
+            gesture=getattr(self,'_material_gesture',None)
+            if gesture:gesture.finish(self._sliders[self._slider_drag_owner[1]].value()/100.0 if gesture.previewed else None)
+            self._material_gesture=None
+            self._slider_drag_owner = None
+            self.refresh_from_scene()
 
         def _on_slider_changed(self, param_key: str, float_val: float) -> None:
             if self._updating:
@@ -374,12 +446,24 @@ def create_hypershade_widget() -> Any:
             mname = self._current_mat_name()
             if not mname:
                 return
+            import bpy
+
+            mat = bpy.data.materials.get(mname)
+            if mat is None or mat != self._selected_material or channel_box_ext.is_datablock_linked(mat):
+                self.refresh_from_scene()
+                return
+            if self._slider_drag_owner is not None and self._slider_drag_owner != (mat, param_key):
+                return
             self._val_labels[param_key].setText(f"{float_val:.2f}")
-            advanced.set_material_parameter(mname, param_key, float_val)
+            gesture=getattr(self,'_material_gesture',None)
+            if gesture:
+                gesture.preview(float_val)
+                if gesture.active and not mat.use_nodes:return
+            else:scene_edits.commit('Shader '+param_key,lambda:advanced.set_material_parameter(mname,param_key,float_val),lambda:_material_edit_state(mat,param_key))
             self.refresh_from_scene()
 
         def _on_create_template(self, template_key: str) -> None:
-            res = advanced.create_from_template(template_key, assign_to_selection=True)
+            res = scene_edits.commit('Create Shader',lambda:advanced.create_from_template(template_key,assign_to_selection=True))
             if res.get("ok"):
                 self._selected_mat_name = res["material"]
             self.refresh_from_scene()
@@ -387,13 +471,13 @@ def create_hypershade_widget() -> Any:
         def _on_assign_selected(self) -> None:
             mname = self._current_mat_name()
             if mname:
-                advanced.assign_material_to_selection(mname)
+                scene_edits.commit('Assign Shader',lambda:advanced.assign_material_to_selection(mname))
                 self.refresh_from_scene()
 
         def _on_select_objects(self) -> None:
             mname = self._current_mat_name()
             if mname:
-                advanced.select_objects_with_material(mname)
+                scene_edits.commit('Select Shader Objects',lambda:advanced.select_objects_with_material(mname))
                 self.refresh_from_scene()
 
         def _on_graph_selected(self) -> None:
@@ -402,19 +486,25 @@ def create_hypershade_widget() -> Any:
                 advanced.graph_material_in_shader_editor(mname)
 
         def _on_purge_unused(self) -> None:
-            advanced.cleanup_scene_materials(delete_unused=True, merge_duplicates=True)
+            scene_edits.commit('Clean Shader Library',lambda:advanced.cleanup_scene_materials(delete_unused=True,merge_duplicates=True))
             self.refresh_from_scene()
 
         def _on_fix_colorspaces(self) -> None:
             from blendertk.mat_utils._mat_utils import MatUtils
 
-            MatUtils.fix_color_spaces()
+            import bpy
+            scene_edits.commit('Fix Color Spaces',MatUtils.fix_color_spaces,
+                lambda:tuple((image.name,image.colorspace_settings.name) for image in bpy.data.images))
             self.refresh_from_scene()
 
         def refresh_from_scene(self) -> None:
             if self._updating:
                 return
             self._updating = True
+            material_guard = QtCore.QSignalBlocker(self.tbl_mats)
+            texture_guard = QtCore.QSignalBlocker(self.tbl_tex)
+            material_scroll = self.tbl_mats.verticalScrollBar().value()
+            texture_scroll = self.tbl_tex.verticalScrollBar().value()
             try:
                 snap = get_hypershade_ui_snapshot()
                 mats = snap["materials"]
@@ -430,21 +520,20 @@ def create_hypershade_widget() -> Any:
                     it_type = QtWidgets.QTableWidgetItem("aiStandard" if m["use_nodes"] else "Surface")
                     it_msh = QtWidgets.QTableWidgetItem(str(m["object_count"]))
                     it_tex = QtWidgets.QTableWidgetItem(str(m["texture_count"]))
-                    self.tbl_mats.setItem(idx, 0, it_name)
-                    self.tbl_mats.setItem(idx, 1, it_type)
-                    self.tbl_mats.setItem(idx, 2, it_msh)
-                    self.tbl_mats.setItem(idx, 3, it_tex)
+                    self._update_table_item(self.tbl_mats, idx, 0, it_name)
+                    self._update_table_item(self.tbl_mats, idx, 1, it_type)
+                    self._update_table_item(self.tbl_mats, idx, 2, it_msh)
+                    self._update_table_item(self.tbl_mats, idx, 3, it_tex)
                     self.tbl_mats.setRowHeight(idx, 23)
 
                 if mats:
                     self.tbl_mats.selectRow(sel_row)
                     active_m = mats[sel_row]["name"]
                     self._selected_mat_name = active_m
-                    self.lbl_active_shader.setText(f"▾  SHADER ATTRIBUTES: {active_m}")
-                    for pk in ("metallic", "roughness", "coat_weight", "emission_strength"):
-                        val = float(mats[sel_row].get(pk, 0.0))
-                        self._sliders[pk].setValue(int(round(val * 100.0)))
-                        self._val_labels[pk].setText(f"{val:.2f}")
+                    self._sync_parameter_sliders(active_m, mats[sel_row])
+                else:
+                    self._selected_mat_name = ""
+                    self._sync_parameter_sliders("")
 
                 imgs = snap["texture_audit"].get("images", [])
                 self.tbl_tex.setRowCount(len(imgs))
@@ -452,12 +541,23 @@ def create_hypershade_widget() -> Any:
                     it_img = QtWidgets.QTableWidgetItem(img["name"])
                     it_path = QtWidgets.QTableWidgetItem(img["filepath"] or img["abspath"])
                     it_ok = QtWidgets.QTableWidgetItem("OK" if img["exists"] else "MISS")
-                    self.tbl_tex.setItem(idx, 0, it_img)
-                    self.tbl_tex.setItem(idx, 1, it_path)
-                    self.tbl_tex.setItem(idx, 2, it_ok)
+                    self._update_table_item(self.tbl_tex, idx, 0, it_img)
+                    self._update_table_item(self.tbl_tex, idx, 1, it_path)
+                    self._update_table_item(self.tbl_tex, idx, 2, it_ok)
                     self.tbl_tex.setRowHeight(idx, 20)
             finally:
+                self.tbl_mats.verticalScrollBar().setValue(material_scroll)
+                self.tbl_tex.verticalScrollBar().setValue(texture_scroll)
+                del material_guard, texture_guard
                 self._updating = False
+
+        def _update_table_item(self, table, row, column, item) -> None:
+            current = table.item(row, column)
+            if current is None:
+                table.setItem(row, column, item)
+                return
+            current.setText(item.text())
+            current.setData(QtCore.Qt.UserRole, item.data(QtCore.Qt.UserRole))
 
     return _MayaHypershadeWidget()
 

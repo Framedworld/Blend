@@ -12,9 +12,22 @@ Provides a dedicated PySide6 Attribute Editor with Maya-style node tabs:
 from __future__ import annotations
 
 import math
+import weakref
 from typing import Any, Dict, List, Optional
 
 from . import channel_box_ext, icons, style
+from ..modeling import rotation
+
+_ae_instances: weakref.WeakSet = weakref.WeakSet()
+
+
+def _edit_state(obj):
+    mat=obj.active_material
+    shader=tuple((n.name,float(n.inputs['Roughness'].default_value),float(n.inputs['Metallic'].default_value))
+                 for n in mat.node_tree.nodes if n.type=='BSDF_PRINCIPLED') if mat and mat.use_nodes and mat.node_tree else ()
+    return (tuple(obj.location),tuple(obj.rotation_euler),tuple(obj.rotation_quaternion),tuple(obj.rotation_axis_angle),
+            tuple(obj.scale),obj.rotation_mode,obj.display_type,getattr(obj.data,'name',None),
+            mat.name if mat else None,shader)
 
 BLENDER_MAYA_CONCEPT_MAPPING: List[Dict[str, str]] = [
     {
@@ -116,7 +129,7 @@ def get_attribute_editor_snapshot(obj: Any = None) -> Dict[str, Any]:
         "tabs": tabs,
         "transform": {
             "location": tuple(round(float(v), 4) for v in target.location),
-            "rotation_deg": tuple(round(math.degrees(float(v)), 4) for v in target.rotation_euler),
+            "rotation_deg": tuple(round(math.degrees(float(v)), 4) for v in rotation.euler(target)),
             "scale": tuple(round(float(v), 4) for v in target.scale),
             "rotation_mode": str(target.rotation_mode),
             "display_type": str(getattr(target, "display_type", "TEXTURED")),
@@ -161,14 +174,14 @@ def set_attribute_editor_value(
             target.location[idx] = float(value)
         elif attr_name in ("rotate_x", "rotate_y", "rotate_z"):
             idx = {"rotate_x": 0, "rotate_y": 1, "rotate_z": 2}[attr_name]
-            target.rotation_euler[idx] = math.radians(float(value))
+            rotation.set_component(target, idx, math.radians(float(value)))
         elif attr_name in ("scale_x", "scale_y", "scale_z"):
             idx = {"scale_x": 0, "scale_y": 1, "scale_z": 2}[attr_name]
             target.scale[idx] = float(value)
         elif attr_name == "display_type":
             target.display_type = str(value).upper()
         elif attr_name == "rotation_mode":
-            target.rotation_mode = str(value).upper()
+            rotation.set_mode(target, str(value).upper())
         else:
             return {"ok": False, "error": f"Unsupported transform attribute '{attr_name}'"}
         target.update_tag()
@@ -215,6 +228,7 @@ class MayaAttributeEditorWidget:
         from qtpy import QtCore, QtWidgets
 
         self._updating = False
+        self._target_object = None
         self.widget = QtWidgets.QFrame(parent)
         self.widget.setObjectName("MayaPanelRoot")
         style.apply_studio_style(self.widget)
@@ -226,9 +240,12 @@ class MayaAttributeEditorWidget:
         # Top Node Header Banner
         hdr = QtWidgets.QFrame()
         hdr.setObjectName("MayaSectionHeader")
-        hrow = QtWidgets.QHBoxLayout(hdr)
-        hrow.setContentsMargins(6, 3, 6, 3)
-        self.lbl_node_title = QtWidgets.QLabel("ATTRIBUTE EDITOR")
+        header = QtWidgets.QVBoxLayout(hdr)
+        header.setContentsMargins(6, 3, 6, 3);header.setSpacing(2)
+        hrow = QtWidgets.QHBoxLayout();header.addLayout(hrow)
+        role = QtWidgets.QLabel('Attribute Editor')
+        role.setObjectName('MayaSectionTitle')
+        self.lbl_node_title = style.elided_label("ATTRIBUTE EDITOR")
         self.lbl_node_title.setObjectName("MayaSectionTitle")
         self.lbl_lock_badge = QtWidgets.QLabel("LOCAL")
         self.lbl_lock_badge.setObjectName("MayaBadgeTeal")
@@ -236,14 +253,17 @@ class MayaAttributeEditorWidget:
         self.btn_native_props.setToolTip("Expose native Blender Properties editor in-place")
         self.btn_native_props.setFixedHeight(20)
         self.btn_native_props.clicked.connect(self._on_open_native_props)
-        hrow.addWidget(self.lbl_node_title)
+        hrow.addWidget(role)
         hrow.addStretch(1)
         hrow.addWidget(self.lbl_lock_badge)
         hrow.addWidget(self.btn_native_props)
+        header.addWidget(self.lbl_node_title)
         vlay.addWidget(hdr)
 
         # Maya Node Tabs (Transform | Shape | Inputs/Modifiers | Material | Blender Mapping)
         self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setElideMode(QtCore.Qt.ElideMiddle)
         vlay.addWidget(self.tabs, 1)
 
         # --- Tab 1: Transform Node ---
@@ -272,18 +292,20 @@ class MayaAttributeEditorWidget:
         form_t.addWidget(self.spn_ry, 1, 2)
         form_t.addWidget(self.spn_rz, 1, 3)
 
-        self.spn_sx = self._make_spin(0.001, 10000.0, 0.1, "scale_x")
-        self.spn_sy = self._make_spin(0.001, 10000.0, 0.1, "scale_y")
-        self.spn_sz = self._make_spin(0.001, 10000.0, 0.1, "scale_z")
+        self.spn_sx = self._make_spin(-10000.0, 10000.0, 0.1, "scale_x")
+        self.spn_sy = self._make_spin(-10000.0, 10000.0, 0.1, "scale_y")
+        self.spn_sz = self._make_spin(-10000.0, 10000.0, 0.1, "scale_z")
         form_t.addWidget(QtWidgets.QLabel("Scale:"), 2, 0)
         form_t.addWidget(self.spn_sx, 2, 1)
         form_t.addWidget(self.spn_sy, 2, 2)
         form_t.addWidget(self.spn_sz, 2, 3)
 
         self.cmb_display = QtWidgets.QComboBox()
-        self.cmb_display.addItems(["TEXTURED", "SOLID", "WIRE", "BOUNDS"])
-        self.cmb_display.currentTextChanged.connect(
-            lambda txt: self._on_transform_edited("display_type", txt)
+        for label, value in (("Normal (Textured)", "TEXTURED"), ("Shaded", "SOLID"),
+                             ("Wireframe", "WIRE"), ("Bounding Box", "BOUNDS")):
+            self.cmb_display.addItem(label, value)
+        self.cmb_display.currentIndexChanged.connect(
+            lambda _i: self._on_transform_edited("display_type", self.cmb_display.currentData())
         )
         form_t.addWidget(QtWidgets.QLabel("Display Type:"), 3, 0)
         form_t.addWidget(self.cmb_display, 3, 1, 1, 3)
@@ -301,10 +323,10 @@ class MayaAttributeEditorWidget:
         s_form = QtWidgets.QFormLayout()
         self.txt_ae_shape_name = QtWidgets.QLineEdit()
         self.txt_ae_shape_name.editingFinished.connect(
-            lambda: set_attribute_editor_value("shape", "shape_name", self.txt_ae_shape_name.text())
+            lambda: self._commit_value("shape", "shape_name", self.txt_ae_shape_name.text())
         )
-        self.lbl_ae_shape_stats = QtWidgets.QLabel("-")
-        self.lbl_ae_drivers = QtWidgets.QLabel("None")
+        self.lbl_ae_shape_stats = style.elided_label("-")
+        self.lbl_ae_drivers = style.elided_label("None")
         s_form.addRow("Shape Datablock:", self.txt_ae_shape_name)
         s_form.addRow("Topology:", self.lbl_ae_shape_stats)
         s_form.addRow("RNA Drivers:", self.lbl_ae_drivers)
@@ -321,17 +343,19 @@ class MayaAttributeEditorWidget:
         m_form = QtWidgets.QFormLayout()
         self.txt_mat_name = QtWidgets.QLineEdit()
         self.txt_mat_name.editingFinished.connect(
-            lambda: set_attribute_editor_value("material", "material_name", self.txt_mat_name.text())
+            lambda: self._commit_value("material", "material_name", self.txt_mat_name.text())
         )
         self.spn_roughness = QtWidgets.QDoubleSpinBox()
         self.spn_roughness.setRange(0.0, 1.0)
         self.spn_roughness.setSingleStep(0.05)
+        self.spn_roughness.setKeyboardTracking(False)
         self.spn_roughness.valueChanged.connect(
             lambda v: self._on_material_edited("roughness", v)
         )
         self.spn_metallic = QtWidgets.QDoubleSpinBox()
         self.spn_metallic.setRange(0.0, 1.0)
         self.spn_metallic.setSingleStep(0.05)
+        self.spn_metallic.setKeyboardTracking(False)
         self.spn_metallic.valueChanged.connect(
             lambda v: self._on_material_edited("metallic", v)
         )
@@ -358,11 +382,10 @@ class MayaAttributeEditorWidget:
             self.tbl_mapping.setRowHeight(r, 24)
         map_lay.addWidget(self.tbl_mapping, 1)
         self.tabs.addTab(self.tab_map, "Maya↔Blender Map")
+        _ae_instances.add(self)
 
     def _make_spin(self, min_v: float, max_v: float, step: float, attr_key: str):
-        from qtpy import QtWidgets
-
-        spn = QtWidgets.QDoubleSpinBox()
+        spn = style.compact_double_spin()
         spn.setRange(min_v, max_v)
         spn.setDecimals(3)
         spn.setSingleStep(step)
@@ -372,12 +395,28 @@ class MayaAttributeEditorWidget:
     def _on_transform_edited(self, attr_key: str, val: Any) -> None:
         if self._updating:
             return
-        set_attribute_editor_value("transform", attr_key, val)
+        self._commit_value("transform", attr_key, val)
 
     def _on_material_edited(self, attr_key: str, val: Any) -> None:
         if self._updating:
             return
-        set_attribute_editor_value("material", attr_key, val)
+        self._commit_value("material", attr_key, val)
+
+    def _commit_value(self, section: str, attr_key: str, value: Any) -> None:
+        """A delayed focus-out must never commit text to a newly selected object."""
+        if self._updating:
+            return
+        import bpy
+
+        active = getattr(bpy.context.view_layer.objects, "active", None)
+        if self._target_object is None or active != self._target_object:
+            self.refresh()
+            return
+        from ..commands.scene_edits import commit
+        target=self._target_object
+        return commit('Attribute Editor · '+attr_key,
+            lambda:set_attribute_editor_value(section,attr_key,value,obj=target),
+            lambda:_edit_state(target))
 
     def _on_open_native_props(self) -> None:
         from . import desktop
@@ -385,9 +424,21 @@ class MayaAttributeEditorWidget:
         desktop.cycle_right_dock("NATIVE_PROPERTIES")
 
     def refresh(self) -> Dict[str, Any]:
+        import bpy
+        from qtpy import QtWidgets
+
         snap = get_attribute_editor_snapshot()
+        active = getattr(bpy.context.view_layer.objects, "active", None)
+        same_target = active is not None and active == self._target_object
+        self._target_object = active
+
+        def editing(control) -> bool:
+            focus = QtWidgets.QApplication.focusWidget()
+            return same_target and (control.hasFocus() or (focus is not None and control.isAncestorOf(focus)))
+
         self._updating = True
         try:
+            self.tabs.setEnabled(snap["has_object"])
             if not snap["has_object"]:
                 self.lbl_node_title.setText("ATTRIBUTE EDITOR — (No Selection)")
                 self.lbl_lock_badge.setText("IDLE")
@@ -401,11 +452,16 @@ class MayaAttributeEditorWidget:
                 self.lbl_lock_badge.setText("EDITABLE")
                 self.lbl_lock_badge.setObjectName("MayaBadgeTeal")
 
-            self.tabs.setTabText(0, snap["object_name"])
+            self.tabs.setTabText(0, 'Transform')
+            self.tabs.setTabToolTip(0, 'Transform — '+snap['object_name'])
             sh = snap["shape"]
-            self.tabs.setTabText(1, sh["shape_name"] or "Shape")
+            self.tabs.setTabText(1, 'Shape')
+            self.tabs.setTabToolTip(1, 'Shape — '+(sh['shape_name'] or 'No shape'))
 
             t = snap["transform"]
+            for spin in (self.spn_rx,self.spn_ry,self.spn_rz):
+                spin.setToolTip('Rotation in degrees; '+('XYZ orientation, preserving '+t['rotation_mode']+'. Native components are available in Channel Box.'
+                    if t['rotation_mode'] in ('QUATERNION','AXIS_ANGLE') else t['rotation_mode']+' Euler order.'))
             editable = snap["editable"]
             for spn, val in (
                 (self.spn_tx, t["location"][0]),
@@ -419,17 +475,22 @@ class MayaAttributeEditorWidget:
                 (self.spn_sz, t["scale"][2]),
             ):
                 spn.blockSignals(True)
-                spn.setValue(val)
+                if not editing(spn):
+                    spn.setValue(val)
                 spn.setReadOnly(not editable)
                 spn.blockSignals(False)
 
             self.cmb_display.blockSignals(True)
-            self.cmb_display.setCurrentText(t["display_type"])
+            if not (same_target and self.cmb_display.view().isVisible()):
+                index = self.cmb_display.findData(t["display_type"])
+                if index >= 0:
+                    self.cmb_display.setCurrentIndex(index)
             self.cmb_display.setEnabled(editable)
             self.cmb_display.blockSignals(False)
 
             self.txt_ae_shape_name.blockSignals(True)
-            self.txt_ae_shape_name.setText(sh["shape_name"] if sh["has_shape"] else "(None)")
+            if not editing(self.txt_ae_shape_name):
+                self.txt_ae_shape_name.setText(sh["shape_name"] if sh["has_shape"] else "(None)")
             self.txt_ae_shape_name.setReadOnly(not sh.get("editable", False))
             self.txt_ae_shape_name.blockSignals(False)
 
@@ -442,18 +503,23 @@ class MayaAttributeEditorWidget:
 
             mat = snap["material"]
             self.txt_mat_name.blockSignals(True)
-            self.txt_mat_name.setText(mat["material_name"] or "(Click to create shader)")
-            self.txt_mat_name.setReadOnly(mat.get("linked", False))
+            material_editable = editable and not mat.get("linked", False) and hasattr(getattr(active, "data", None), "materials")
+            if not editing(self.txt_mat_name):
+                self.txt_mat_name.setText(mat["material_name"])
+            self.txt_mat_name.setPlaceholderText("Type a shader name to create")
+            self.txt_mat_name.setReadOnly(not material_editable)
             self.txt_mat_name.blockSignals(False)
 
             self.spn_roughness.blockSignals(True)
-            self.spn_roughness.setValue(mat["roughness"])
-            self.spn_roughness.setReadOnly(mat.get("linked", False))
+            if not editing(self.spn_roughness):
+                self.spn_roughness.setValue(mat["roughness"])
+            self.spn_roughness.setReadOnly(not material_editable)
             self.spn_roughness.blockSignals(False)
 
             self.spn_metallic.blockSignals(True)
-            self.spn_metallic.setValue(mat["metallic"])
-            self.spn_metallic.setReadOnly(mat.get("linked", False))
+            if not editing(self.spn_metallic):
+                self.spn_metallic.setValue(mat["metallic"])
+            self.spn_metallic.setReadOnly(not material_editable)
             self.spn_metallic.blockSignals(False)
         except Exception:
             pass
@@ -482,17 +548,25 @@ def ensure_attribute_editor_widget() -> Optional[MayaAttributeEditorWidget]:
 
 
 def refresh_attribute_editor() -> Optional[Dict[str, Any]]:
-    if _ae_instance is not None:
-        return _ae_instance.refresh()
-    return None
+    result = None
+    for controller in list(_ae_instances):
+        try:
+            controller.widget.objectName()
+            snap = controller.refresh()
+            if controller is _ae_instance or result is None:
+                result = snap
+        except RuntimeError:
+            _ae_instances.discard(controller)
+    return result
 
 
 def teardown_attribute_editor() -> None:
     global _ae_instance
-    if _ae_instance is not None:
+    for controller in list(_ae_instances):
         try:
-            _ae_instance.widget.hide()
-            _ae_instance.widget.deleteLater()
+            controller.widget.hide()
+            controller.widget.deleteLater()
         except Exception:
             pass
-        _ae_instance = None
+    _ae_instances.clear()
+    _ae_instance = None

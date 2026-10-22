@@ -28,10 +28,55 @@ def get_icon(name: str, size: int = 24):
     if key in _ICON_CACHE:
         return _ICON_CACHE[key]
 
-    pix = render_pixmap(name, size=size)
+    pix = render_svg_pixmap(name, size=size) if name in SVG_ICON_PATHS else render_pixmap(name, size=size)
     icon = QtGui.QIcon(pix)
     _ICON_CACHE[key] = icon
     return icon
+
+
+# Stroke-style 24x24 icons for the Maya-order Status Line (scene, selection mode, editor toggles)
+SVG_ICON_PATHS: Dict[str, str] = {
+    "scene_new": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 12v6M9 15h6"/>',
+    "scene_open": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    "scene_save": '<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3"/><path d="M7 21v-7h10v7"/>',
+    "sel_hierarchy": '<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/>',
+    "sel_object": '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
+    "sel_component": '<circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M7 5h10M5 7v10M19 7v10M7 19h10"/>',
+    "snap_plane": '<path d="M3 15l9-5 9 5-9 5z"/><path d="M12 10V3"/>',
+    "history": '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 3"/>',
+    "render_frame": '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/>',
+    "panel_attr_editor": '<path d="M8 6h13M8 12h13M8 18h13M3 6h2M3 12h2M3 18h2"/>',
+    "panel_tool_settings": '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+    "panel_channel_box": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M10 4v16"/>',
+    "panel_modifier_stack": '<rect x="4" y="3" width="16" height="5" rx="1"/><rect x="4" y="10" width="16" height="5" rx="1"/><rect x="4" y="17" width="16" height="4" rx="1"/>',
+    "layout_single": '<rect x="3" y="4" width="18" height="16" rx="1.5"/>',
+    "layout_four": '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M12 4v16M3 12h18"/>',
+    "layout_outliner": '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M9 4v16"/>',
+    "layout_graph": '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 14h18"/>',
+}
+
+
+def render_svg_pixmap(name: str, size: int = 24, color: str = "#C9CDD3"):
+    """Render one of `SVG_ICON_PATHS` as a crisp stroke icon (falls back to the QPainter engine without QtSvg)."""
+    from qtpy import QtCore, QtGui
+
+    s = max(12, int(size))
+    try:
+        from qtpy import QtSvg
+    except Exception:
+        return render_pixmap(name, size=s)
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{s}" height="{s}" viewBox="0 0 24 24" fill="none" '
+        f'stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{SVG_ICON_PATHS[name]}</svg>'
+    )
+    pix = QtGui.QPixmap(s, s)
+    pix.fill(QtCore.Qt.transparent)
+    renderer = QtSvg.QSvgRenderer(QtCore.QByteArray(svg.encode("utf-8")))
+    p = QtGui.QPainter(pix)
+    p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+    renderer.render(p)
+    p.end()
+    return pix
 
 
 def render_pixmap(name: str, size: int = 24):

@@ -10,6 +10,7 @@ Registers:
 
 from __future__ import annotations
 
+import os
 from typing import Tuple
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
@@ -205,7 +206,74 @@ class LANDFALL_STUDIO_OT_validate_interchange(Operator):
         return {"FINISHED"}
 
 
+class LANDFALL_STUDIO_OT_import_maya_ascii(Operator):
+    """Read a Maya ASCII scene's geometry without a Maya runtime."""
+
+    bl_idname = "landfall_studio.import_maya_ascii"
+    bl_label = "Import Maya ASCII (.ma, native)"
+    bl_description = ("Import transforms, polygon meshes, UVs and hard edges from a .ma file with "
+                      "Studio's native reader. No Maya installation is needed")
+    bl_options = {"REGISTER", "UNDO"}
+
+    filepath: StringProperty(name="File Path", subtype="FILE_PATH", default="")
+    filter_glob: StringProperty(default="*.ma", options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        from . import maya_ascii
+        result = maya_ascii.import_maya_ascii(bpy.path.abspath(self.filepath))
+        if not result.get("ok"):
+            self.report({"ERROR"}, result.get("error", "Import failed"))
+            return {"CANCELLED"}
+        message = f"Imported {len(result['objects'])} node(s), {result['mesh_count']} mesh(es)"
+        if result.get("skipped"):
+            message += "; skipped " + ", ".join(f"{s['node']} ({s['reason']})" for s in result["skipped"])
+        self.report({"WARNING"} if result.get("skipped") else {"INFO"}, message)
+        return {"FINISHED"}
+
+
+class LANDFALL_STUDIO_OT_export_maya_ascii(Operator):
+    """Write geometry to a Maya ASCII scene without a Maya runtime."""
+
+    bl_idname = "landfall_studio.export_maya_ascii"
+    bl_label = "Export Maya ASCII (.ma, native)"
+    bl_description = ("Write transforms, polygon meshes (with modifiers applied), UVs and hard edges to a "
+                      ".ma file Maya opens. No Maya installation is needed")
+    bl_options = {"REGISTER"}
+
+    filepath: StringProperty(name="File Path", subtype="FILE_PATH", default="")
+    filter_glob: StringProperty(default="*.ma", options={"HIDDEN"})
+    check_existing: BoolProperty(default=True, options={"HIDDEN"})
+    selected_only: BoolProperty(name="Selected Only", default=False)
+
+    def invoke(self, context, event):
+        if not self.filepath:
+            self.filepath = bpy.path.ensure_ext(bpy.path.display_name_sans_ext(bpy.data.filepath) or "scene", ".ma")
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        from . import maya_ascii
+        path = bpy.path.ensure_ext(bpy.path.abspath(self.filepath), ".ma")
+        protected = maya_bridge._last_imported_source_path
+        if protected and os.path.abspath(protected) == os.path.abspath(path):
+            self.report({"ERROR"}, "Refusing to overwrite the Maya scene this file was imported from.")
+            return {"CANCELLED"}
+        objects = list(context.selected_objects) if self.selected_only else list(context.scene.objects)
+        result = maya_ascii.export_maya_ascii(path, objects)
+        if not result.get("ok"):
+            self.report({"ERROR"}, result.get("error", "Export failed"))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Wrote {result['meshes']} mesh(es), {result['transforms']} transform(s) to {path}")
+        return {"FINISHED"}
+
+
 _CLASSES: Tuple[type, ...] = (
+    LANDFALL_STUDIO_OT_import_maya_ascii,
+    LANDFALL_STUDIO_OT_export_maya_ascii,
     LANDFALL_STUDIO_OT_import_maya_scene,
     LANDFALL_STUDIO_OT_save_as_maya_scene,
     LANDFALL_STUDIO_OT_send_to_maya,

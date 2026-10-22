@@ -1,4 +1,4 @@
-"""Maya-style context-sensitive GPU Marking Menus for Landfall Studio (Phase 02).
+"""Maya-style context-sensitive PySide6 Marking Menus for Landfall Studio.
 
 Provides three distinct RMB marking menu modes:
 - `COMPONENT` (`RMB`): Seamless Vertex / Edge / Face / Multi / UV / Object Mode with cursor raycast target selection, plus Display & Snap branches.
@@ -193,6 +193,7 @@ def get_marking_menu_state() -> Dict[str, Any]:
         "cursor": (_studio_mm["cursor_x"], _studio_mm["cursor_y"]),
         "rect_count": len(_studio_mm["rects"]),
         "has_draw_handler": _studio_mm["handle"] is not None,
+        "has_qt_widget": _studio_mm.get("qt_overlay") is not None,
     }
 
 
@@ -589,6 +590,9 @@ def _studio_mm_hit(mx: float, my: float) -> Optional[Tuple[str, int]]:
 
 def stop_studio_marking_menu() -> None:
     """Remove the active Studio Marking Menu draw handler and clear state."""
+    qt_overlay = _studio_mm.pop("qt_overlay", None)
+    if qt_overlay is not None:
+        qt_overlay.teardown()
     handle = _studio_mm.get("handle")
     if handle is not None:
         try:
@@ -723,9 +727,11 @@ class LANDFALL_STUDIO_OT_marking_menu(bpy.types.Operator):
             }
         )
         _build_mm_layout(context)
-        _studio_mm["handle"] = bpy.types.SpaceView3D.draw_handler_add(
-            _studio_mm_draw, (), "WINDOW", "POST_PIXEL"
-        )
+        if not bpy.app.background:
+            from ..ui.marking_menu import QtMarkingMenu
+            window = context.window or next(w for w in context.window_manager.windows
+                                           if any(a == area for a in w.screen.areas))
+            _studio_mm["qt_overlay"] = QtMarkingMenu(self, window, area, region)
         area.tag_redraw()
         return area, region
 
@@ -820,7 +826,7 @@ class LANDFALL_STUDIO_OT_marking_menu(bpy.types.Operator):
 
     def modal(self, context, event):
         if not _studio_mm["open"]:
-            return {"FINISHED"}
+            return {"FINISHED", "PASS_THROUGH"}
 
         if event.type == "MOUSEMOVE":
             mx, my = float(event.mouse_region_x), float(event.mouse_region_y)

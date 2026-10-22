@@ -134,6 +134,184 @@ def _snapshot_mesh_state(obj: Any) -> Dict[str, Any]:
     }
 
 
+def _topology_edit_error(obj: Any) -> str:
+    from ..ui.channel_box_ext import is_datablock_linked
+
+    if is_datablock_linked(obj) or is_datablock_linked(obj.data):
+        return "Modeling caddies require a local editable mesh. Make a local copy first."
+    if obj.data.shape_keys is not None:
+        return "Topology editing is blocked on a mesh with Shape Keys. Use a separate modeling copy."
+    if obj.data.users > 1:
+        return "This mesh is shared by multiple objects. Make its mesh data single-user before editing topology."
+    if any(mod.type == "MULTIRES" and mod.total_levels > 0 for mod in obj.modifiers):
+        return "Topology editing is blocked while Multires sculpt levels exist. Use a separate modeling copy."
+    return ""
+
+
+def _mesh_revision_signature(obj: Any, skip_vertices: Sequence[int] = ()) -> str:
+    """Hash editable mesh data only when a caddy action can replace it.
+
+    `skip_vertices` excludes those positions only: an extrusion cap moved by
+    the manipulator is absorbed into the caddy, everything else must match.
+    """
+    from array import array
+    import hashlib
+    import struct
+
+    if obj.mode == "EDIT":
+        obj.update_from_editmode()
+    mesh = obj.data
+    digest = hashlib.blake2b(digest_size=20)
+    digest.update(str(mesh.as_pointer()).encode("ascii"))
+
+    def values(collection, prop, kind, width=1):
+        buffer = array(kind, [0]) * (len(collection) * width)
+        if buffer:
+            collection.foreach_get(prop, buffer)
+        digest.update(buffer.tobytes())
+
+    if skip_vertices:
+        coords = array("f", [0.0]) * (len(mesh.vertices) * 3)
+        if coords:
+            mesh.vertices.foreach_get("co", coords)
+        for index in skip_vertices:
+            if 0 <= index < len(mesh.vertices):
+                coords[3 * index:3 * index + 3] = array("f", (0.0, 0.0, 0.0))
+        digest.update(coords.tobytes())
+    else:
+        values(mesh.vertices, "co", "f", 3)
+    values(mesh.edges, "vertices", "i", 2)
+    values(mesh.loops, "vertex_index", "i")
+    values(mesh.polygons, "loop_total", "i")
+    values(mesh.polygons, "material_index", "i")
+    # UVs, colors, masks and generic attributes can also be lost by a baseline
+    # restore. Selection/hide changes are deliberately allowed between edits.
+    properties = {"FLOAT": ("value", "f", 1), "INT": ("value", "i", 1),
+        "INT8": ("value", "i", 1), "BOOLEAN": ("value", "b", 1),
+        "FLOAT_VECTOR": ("vector", "f", 3), "FLOAT2": ("vector", "f", 2),
+        "FLOAT_COLOR": ("color", "f", 4), "BYTE_COLOR": ("color", "f", 4)}
+    for attribute in mesh.attributes:
+        if attribute.name == "position" or attribute.name.startswith((".select", ".hide")):
+            continue
+        digest.update((attribute.name + ":" + attribute.data_type + ":" + attribute.domain).encode("utf-8"))
+        spec = properties.get(attribute.data_type)
+        if spec is not None:
+            values(attribute.data, *spec)
+    for vertex in mesh.vertices:
+        digest.update(struct.pack("<I", len(vertex.groups)))
+        for group in vertex.groups:
+            digest.update(struct.pack("<If", group.group, group.weight))
+    return digest.hexdigest()
+
+
+def _record_caddy_result(obj: Any, res: Dict[str, Any]) -> None:
+    """Remember the exact result, and the cap the manipulator may move."""
+    cap = res.get("cap")
+    _active_caddy["cap"] = cap
+    _active_caddy["result_signature"] = _mesh_revision_signature(obj)
+    _active_caddy["cap_signature"] = (
+        _mesh_revision_signature(obj, cap["indices"]) if cap else "")
+
+
+def _modal_transform_running() -> bool:
+    import bpy
+    try:
+        return any(window.modal_operators for window in bpy.context.window_manager.windows)
+    except Exception:
+        return False
+
+
+def _current_cap_coords(obj: Any, indices: Sequence[int]) -> Optional[List[Tuple[float, float, float]]]:
+    import bmesh
+    if obj.mode == "EDIT":
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.verts.ensure_lookup_table()
+        if len(bm.verts) <= max(indices, default=-1):
+            return None
+        return [tuple(bm.verts[i].co) for i in indices]
+    verts = obj.data.vertices
+    if len(verts) <= max(indices, default=-1):
+        return None
+    return [tuple(verts[i].co) for i in indices]
+
+
+def reconcile_manipulator_edit() -> Dict[str, Any]:
+    """Absorb a manipulator move/scale of the extruded cap into the caddy.
+
+    Maya's extrude manipulator *is* the node's thickness, offset and local
+    translate. Here the native Move/Scale tool edits the cap vertices, and
+    this reads that edit back as caddy parameters instead of treating it as
+    an unrelated change. Only a rigid translation plus uniform scale of the
+    cap, with every other vertex, edge, face and attribute untouched, is
+    absorbed; anything else leaves the existing change guard in charge.
+    """
+    from mathutils import Vector
+    import bpy
+
+    if not _active_caddy.get("open") or _active_caddy.get("tool") != "EXTRUDE":
+        return {"ok": True, "absorbed": False}
+    cap = _active_caddy.get("cap")
+    obj = bpy.data.objects.get(_active_caddy.get("object_name", ""))
+    if not cap or obj is None or getattr(obj, "type", "") != "MESH":
+        return {"ok": True, "absorbed": False}
+    if _modal_transform_running():
+        return {"ok": True, "absorbed": False, "pending": True}
+    current = _current_cap_coords(obj, cap["indices"])
+    if current is None:
+        return {"ok": True, "absorbed": False}
+    expected = [Vector(c) for c in cap["coords"]]
+    moved = [Vector(c) for c in current]
+    if all((a - b).length < 1e-7 for a, b in zip(moved, expected)):
+        return {"ok": True, "absorbed": False}
+    if _mesh_revision_signature(obj, cap["indices"]) != _active_caddy.get("cap_signature"):
+        return {"ok": True, "absorbed": False}
+
+    count = float(len(expected))
+    centre_e = sum(expected, Vector()) / count
+    centre_m = sum(moved, Vector()) / count
+    spread = sum(((e - centre_e).length_squared for e in expected), 0.0)
+    factor = 1.0
+    if spread > 1e-12:
+        factor = sum(((m - centre_m).dot(e - centre_e) for m, e in zip(moved, expected)), 0.0) / spread
+    size = max(spread / count, 1e-8) ** 0.5
+    residual = max((m - (centre_m + (e - centre_e) * factor)).length for m, e in zip(moved, expected))
+    if factor <= 1e-4 or residual > max(1e-5, 1e-3 * size):
+        return {"ok": True, "absorbed": False}
+
+    params = _active_caddy["params"]
+    normal = Vector(cap["normal"])
+    shift = centre_m - centre_e
+    along = shift.dot(normal)
+    spec = {p["key"]: p for p in CADDY_SCHEMAS["EXTRUDE"]["params"]}
+    thickness = float(params.get("thickness", 0.0)) + along
+    old_scale = max(0.05, 1.0 - float(params.get("offset", 0.0)))
+    offset = 1.0 - old_scale * factor if abs(factor - 1.0) > 1e-6 else float(params.get("offset", 0.0))
+    if not (spec["thickness"]["min"] <= thickness <= spec["thickness"]["max"]
+            and spec["offset"]["min"] <= offset <= spec["offset"]["max"]
+            and 1.0 - offset >= 0.05):
+        return {"ok": True, "absorbed": False}
+    lateral = Vector(params.get("cap_shift", (0.0, 0.0, 0.0))) + (shift - normal * along)
+    params["thickness"] = round(thickness, 6)
+    params["offset"] = round(offset, 6)
+    params["cap_shift"] = tuple(float(c) for c in lateral) if lateral.length > 1e-7 else (0.0, 0.0, 0.0)
+    cap["coords"] = [tuple(c) for c in current]
+    _active_caddy["result_signature"] = _mesh_revision_signature(obj)
+    _active_caddy["anchor_world"] = tuple(obj.matrix_world @ centre_m)
+    _record_caddy_in_command_registry("EXTRUDE", params)
+    return {"ok": True, "absorbed": True, "thickness": params["thickness"],
+            "offset": params["offset"], "cap_shift": params["cap_shift"]}
+
+
+def _caddy_target_error(obj: Any) -> str:
+    error = _topology_edit_error(obj)
+    if error:
+        return error
+    reconcile_manipulator_edit()
+    if _active_caddy.get("result_signature") != _mesh_revision_signature(obj):
+        return "The mesh changed after this caddy operation. The caddy was closed to preserve your later edits."
+    return ""
+
+
 def _restore_mesh_snapshot(obj: Any, snap: Dict[str, Any]) -> None:
     """Restore `obj`'s full BMesh geometry, customdata (skin weights, shape keys, all UV layers), and selections from `snap`."""
     import bpy
@@ -182,6 +360,14 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
     bm.edges.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
 
+    required = [f for f in bm.faces if f.select] if tool_upper == "EXTRUDE" else [e for e in bm.edges if e.select]
+    minimum = 2 if tool_upper == "BRIDGE" else 1
+    if len(required) < minimum:
+        if not is_edit:
+            bm.free()
+        component = "faces" if tool_upper == "EXTRUDE" else "edges"
+        return {"ok": False, "error": f"Select {minimum} or more {component} before using {tool_upper.title()}."}
+
     if tool_upper == "EXTRUDE":
         thickness = float(params.get("thickness", 0.25))
         offset = float(params.get("offset", 0.0))
@@ -189,8 +375,6 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
         keep_together = bool(params.get("keep_faces_together", True))
 
         sel_faces = [f for f in bm.faces if f.select]
-        if not sel_faces and bm.faces:
-            sel_faces = [bm.faces[0]]
 
         if keep_together:
             ret = bmesh.ops.extrude_face_region(bm, geom=sel_faces)
@@ -216,6 +400,9 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
                     center += v.co
                 center /= float(len(ex_verts))
 
+            # Lateral manipulator moves absorbed from the viewport (Maya's
+            # Local Translate X/Y); the normal component lives in thickness.
+            cap_shift = Vector(params.get("cap_shift", (0.0, 0.0, 0.0)))
             for v in ex_verts:
                 v.co += avg_n * thickness
                 if abs(offset) > 1e-6:
@@ -224,6 +411,8 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
                     if radial_t.length > 1e-6:
                         scale_fac = max(0.05, 1.0 - offset)
                         v.co = (center + avg_n * thickness) + radial_t * scale_fac
+                v.co += cap_shift
+            cap_info = {"normal": tuple(avg_n)}
 
             if divisions > 1:
                 # Side wall edges connect an ex_vert to a non-ex_vert
@@ -237,9 +426,19 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
                     bmesh.ops.subdivide_edges(
                         bm, edges=side_edges, cuts=divisions - 1, use_grid_fill=True
                     )
+            # Only the new cap stays selected, as after Maya's extrude: the
+            # base ring left selected would follow the manipulator too.
+            for element in (*bm.verts, *bm.edges, *bm.faces):
+                element.select = False
+            for face in ex_faces:
+                if face.is_valid:
+                    face.select_set(True)
         else:
             ret = bmesh.ops.extrude_discrete_faces(bm, faces=sel_faces)
+            for element in (*bm.verts, *bm.edges, *bm.faces):
+                element.select = False
             for f in ret.get("faces", []):
+                f.select_set(True)
                 nrm = f.normal.copy()
                 f_center = f.calc_center_median()
                 for v in f.verts:
@@ -254,10 +453,8 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
         clamp_overlap = bool(params.get("clamp_overlap", True))
 
         sel_edges = [e for e in bm.edges if e.select]
-        if not sel_edges:
-            sel_edges = list(bm.edges)
         if sel_edges:
-            bmesh.ops.bevel(
+            result = bmesh.ops.bevel(
                 bm,
                 geom=sel_edges,
                 offset=width,
@@ -267,6 +464,8 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
                 affect="EDGES",
                 clamp_overlap=clamp_overlap,
             )
+            for face in result.get("faces", []):
+                face.select_set(True)
 
     elif tool_upper == "BRIDGE":
         divisions = max(0, int(params.get("divisions", 1)))
@@ -274,8 +473,6 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
         smoothing_angle = float(params.get("smoothing_angle", 30.0))
 
         sel_edges = [e for e in bm.edges if e.select]
-        if len(sel_edges) < 2:
-            sel_edges = [e for e in bm.edges if e.is_boundary]
         if len(sel_edges) >= 2:
             ret = bmesh.ops.bridge_loops(
                 bm,
@@ -302,8 +499,6 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
         pinch = max(-0.9, min(0.9, float(params.get("pinch", 0.0))))
 
         sel_edges = [e for e in bm.edges if e.select]
-        if not sel_edges:
-            sel_edges = list(bm.edges)
 
         # Record endpoint pairs for each edge before subdividing so we can apply slide & pinch
         edge_endpoints = [(e.verts[0].co.copy(), e.verts[1].co.copy()) for e in sel_edges]
@@ -339,6 +534,13 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
                     v.co = a_co.lerp(b_co, t_final)
 
     bm.normal_update()
+    cap = None
+    if tool_upper == "EXTRUDE" and keep_together:
+        bm.verts.index_update()
+        bm.verts.ensure_lookup_table()
+        indices = sorted({v.index for f in bm.faces if f.select for v in f.verts})
+        cap = dict(cap_info, indices=indices,
+                   coords=[tuple(bm.verts[i].co) for i in indices])
     if is_edit:
         bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=True)
     else:
@@ -348,6 +550,7 @@ def _execute_bm_operation(obj: Any, tool_upper: str, params: Dict[str, Any]) -> 
 
     return {
         "ok": True,
+        "cap": cap,
         "object_name": obj.name,
         "tool": tool_upper,
         "vertex_count": len(obj.data.vertices),
@@ -384,6 +587,9 @@ def invoke_modeling_caddy(
 
     if obj is None or getattr(obj, "type", "") != "MESH":
         return {"ok": False, "error": f"{t_upper} caddy requires an active MESH object."}
+    guard = _topology_edit_error(obj)
+    if guard:
+        return {"ok": False, "guarded": True, "error": guard}
 
     merged_overrides: Dict[str, Any] = {}
     if isinstance(params_dict, dict):
@@ -397,8 +603,18 @@ def invoke_modeling_caddy(
         params[k] = merged_overrides.get(k, p_spec["default"])
 
     _cleanup_snapshot_backup_mesh(_active_caddy.get("snapshot"))
+    _active_caddy["open"] = False
+    _active_caddy["snapshot"] = None
     snap = _snapshot_mesh_state(obj)
-    res = _execute_bm_operation(obj, t_upper, params)
+    try:
+        res = _execute_bm_operation(obj, t_upper, params)
+    except Exception as exc:
+        _restore_mesh_snapshot(obj, snap)
+        _cleanup_snapshot_backup_mesh(snap)
+        return {"ok": False, "error": str(exc)}
+    if not res.get("ok"):
+        _cleanup_snapshot_backup_mesh(snap)
+        return res
 
     _active_caddy = {
         "open": True,
@@ -410,6 +626,7 @@ def invoke_modeling_caddy(
         "anchor_world": snap["anchor_world"],
         "snapshot": snap,
     }
+    _record_caddy_result(obj, res)
 
     # Record in unified Studio command registry so 'G' repeats with current caddy parameters
     _record_caddy_in_command_registry(t_upper, params)
@@ -425,6 +642,39 @@ def invoke_modeling_caddy(
         "edge_count": res["edge_count"],
         "face_count": res["face_count"],
     }
+
+
+def begin_maya_extrude(context: Any = None) -> Dict[str, Any]:
+    """Maya's Extrude: faces in place, then the manipulator and caddy take over.
+
+    Shared by Ctrl+E, the Edit Mesh menu, the shelf and the Modeling Toolkit
+    so all of them behave identically. The Move tool is shown aligned to the
+    face normal (restored when the caddy closes); dragging it is read back as
+    Thickness/Offset by `reconcile_manipulator_edit`.
+    """
+    import bpy
+
+    ctx = context or bpy.context
+    res = invoke_modeling_caddy("EXTRUDE", thickness=0.0)
+    if not res.get("ok"):
+        return res
+    try:
+        tools = ctx.workspace.tools.from_space_view3d_mode(ctx.mode, create=False)
+        if tools is None or tools.idname not in {"builtin.move", "builtin.rotate",
+                                                "builtin.scale", "builtin.transform"}:
+            bpy.ops.wm.tool_set_by_id(name="builtin.move")
+    except (RuntimeError, AttributeError):
+        pass  # No 3D viewport (background); the caddy is still complete.
+    try:
+        slot = ctx.scene.transform_orientation_slots[0]
+        if slot.type != "NORMAL":
+            _active_caddy["restore_orientation"] = slot.type
+            slot.type = "NORMAL"
+    except (AttributeError, IndexError):
+        pass
+    for area in (ctx.screen.areas if getattr(ctx, "screen", None) else []):
+        area.tag_redraw()
+    return res
 
 
 def _record_caddy_in_command_registry(tool_upper: str, params: Dict[str, Any]) -> None:
@@ -465,12 +715,25 @@ def set_caddy_parameter(param_key: str, value: Any) -> Dict[str, Any]:
     obj = bpy.data.objects.get(_active_caddy["object_name"])
     if obj is None or _active_caddy.get("snapshot") is None:
         return {"ok": False, "error": "Caddy target object or baseline snapshot is no longer valid."}
+    guard = _caddy_target_error(obj)
+    if guard:
+        commit_or_close_caddy()
+        return {"ok": False, "guarded": True, "error": guard}
 
     _active_caddy["params"][param_key] = coerced
     _active_caddy["active_param_key"] = param_key
 
     _restore_mesh_snapshot(obj, _active_caddy["snapshot"])
-    res = _execute_bm_operation(obj, t_upper, _active_caddy["params"])
+    try:
+        res = _execute_bm_operation(obj, t_upper, _active_caddy["params"])
+    except Exception as exc:
+        _restore_mesh_snapshot(obj, _active_caddy["snapshot"])
+        commit_or_close_caddy()
+        return {"ok": False, "error": str(exc)}
+    if not res.get("ok"):
+        commit_or_close_caddy()
+        return res
+    _record_caddy_result(obj, res)
     _record_caddy_in_command_registry(t_upper, _active_caddy["params"])
 
     return {
@@ -519,6 +782,16 @@ def commit_or_close_caddy() -> Dict[str, Any]:
     global _active_caddy
     was_open = bool(_active_caddy.get("open"))
     tool = _active_caddy.get("tool", "")
+    restore = _active_caddy.pop("restore_orientation", "")
+    if restore:
+        try:
+            import bpy
+            slot = bpy.context.scene.transform_orientation_slots[0]
+            # Only undo our own change; a choice the artist made since stays.
+            if slot.type == "NORMAL":
+                slot.type = restore
+        except Exception:
+            pass
     _cleanup_snapshot_backup_mesh(_active_caddy.get("snapshot"))
     _active_caddy["open"] = False
     _active_caddy["snapshot"] = None
@@ -528,8 +801,27 @@ def commit_or_close_caddy() -> Dict[str, Any]:
 commit_caddy = commit_or_close_caddy
 
 
+def cancel_caddy() -> Dict[str, Any]:
+    """Restore the captured mesh, including custom data, before closing."""
+    import bpy
+    obj = bpy.data.objects.get(_active_caddy.get("object_name", ""))
+    snapshot = _active_caddy.get("snapshot")
+    if _active_caddy.get("open") and obj is not None and snapshot is not None:
+        guard = _caddy_target_error(obj)
+        if guard:
+            commit_or_close_caddy()
+            return {"ok": False, "guarded": True, "error": guard}
+        _restore_mesh_snapshot(obj, snapshot)
+    return commit_or_close_caddy()
+
+
 def get_active_caddy_state() -> Dict[str, Any]:
     """Return a JSON-serializable snapshot of the active In-Viewport Heads-Up Caddy."""
+    if _active_caddy.get("open"):
+        try:
+            reconcile_manipulator_edit()
+        except Exception:
+            pass
     if not _active_caddy.get("open"):
         return {
             "open": False,
@@ -647,7 +939,7 @@ def weld_vertices_target_weld(
     cmd_registry.record_command(
         cmd_id="landfall_studio.target_weld",
         kwargs={"merge_to_center": bool(merge_to_center)},
-        callable_fn=lambda m=bool(merge_to_center): activate_target_weld(merge_to_center=m),
+        callable_fn=activate_target_weld,
         label="Target Weld" if not merge_to_center else "Target Weld (Center)",
         repeatable=True,
     )
@@ -677,7 +969,7 @@ def activate_target_weld(merge_to_center: bool = False) -> Dict[str, Any]:
         cmd_registry.record_command(
             cmd_id="landfall_studio.target_weld",
             kwargs={"merge_to_center": bool(merge_to_center)},
-            callable_fn=lambda m=bool(merge_to_center): activate_target_weld(merge_to_center=m),
+            callable_fn=activate_target_weld,
             label="Target Weld" if not merge_to_center else "Target Weld (Center)",
             repeatable=True,
         )

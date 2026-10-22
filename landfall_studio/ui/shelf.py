@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from .. import commands as cmd_registry
-from . import channel_box_ext, icons, style, tool_settings
+from . import channel_box_ext, icons, menus, style, tool_settings
 
 SHELF_TABS: Dict[str, List[Dict[str, str]]] = {
     "Polygons": [
@@ -142,7 +142,7 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         return {"ok": True, "item_id": iid, "result": res}
 
     if iid == "send_maya":
-        res = interchange.send_to_maya(scope="SELECTED", dry_run=True)
+        res = interchange.send_to_maya(scope="SELECTED", dry_run=False)
         interchange_panel.refresh_interchange_widgets()
         desktop.set_command_feedback("SendToMaya", res.get("status", "OK"))
         return {"ok": res.get("ok", False), "item_id": iid, "result": res}
@@ -151,6 +151,15 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         res = desktop.cycle_right_dock("SHAPE_EDITOR")
         desktop.set_command_feedback("ShapeEditor", "Shape / Skin Dock Open")
         return {"ok": True, "item_id": iid, "result": res}
+
+    if iid == "isolate":
+        res = menus.run_op("view3d.localview")
+        return {"ok": res == {"FINISHED"}, "item_id": iid, "result": str(res)}
+
+    if iid == "joint_tool":
+        # Create an actual editable armature rather than just changing feedback.
+        res = menus.run_op("object.armature_add", enter_editmode=True)
+        return {"ok": res == {"FINISHED"}, "item_id": iid, "result": str(res)}
 
     if iid == "blendshape_anim":
         res = desktop.open_panel("blendshape_animator", docked=False)
@@ -211,8 +220,15 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         )
         cmd_registry.record_command(
             cmd_id=f"shelf.{iid}",
-            kwargs={"primitive_type": ptype},
-            callable_fn=lambda p=ptype: channel_box_ext.create_maya_primitive(primitive_type=p),
+            kwargs={
+                "primitive_type": ptype,
+                "width": opts["prim_width"], "height": opts["prim_height"],
+                "depth": opts["prim_depth"], "radius": opts["prim_radius"],
+                "subdivisions_x": opts["prim_subdivisions_x"],
+                "subdivisions_y": opts["prim_subdivisions_y"],
+                "subdivisions_z": opts["prim_subdivisions_z"],
+            },
+            callable_fn=channel_box_ext.create_maya_primitive,
             label=f"Poly {ptype.title()}",
             repeatable=True,
         )
@@ -222,24 +238,28 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         return {"ok": True, "item_id": iid, "result": res}
 
     if iid in ("bevel", "extrude", "bridge", "connect"):
-        res = modeling.invoke_modeling_caddy(iid.upper())
+        if iid == "extrude":
+            from ..modeling import caddy
+            res = caddy.begin_maya_extrude()
+        else:
+            res = modeling.invoke_modeling_caddy(iid.upper())
         desktop.sync_channels_now()
         channel_box_ext.refresh_channel_box_extensions()
         modeling_toolkit.refresh_modeling_toolkit_widgets()
-        desktop.set_command_feedback(f"poly{iid.title()}", str(res.get("node_title", iid)))
+        desktop.set_command_feedback(f"poly{iid.title()}", str(res.get("node_title") or res.get("error", iid)),
+            level="INFO" if res.get("ok") else "ERROR")
         return {"ok": res.get("ok", True), "item_id": iid, "result": res}
 
     if iid == "target_weld":
         res = modeling.activate_target_weld(merge_to_center=False)
-        desktop.set_command_feedback("TargetWeldTool", "Active")
+        desktop.set_command_feedback("TargetWeldTool", "Active" if res.get("ok") else res.get("error", "Could not activate"),
+            level="INFO" if res.get("ok") else "ERROR")
         return {"ok": res.get("ok", True), "item_id": iid, "result": res}
 
     if iid == "quad_draw":
-        modeling.set_quad_draw_active(True)
-        obj = modeling.ensure_retopo_mesh()
+        res = menus.run_op("landfall_studio.quad_draw_modal", invoke=True)
         modeling_toolkit.refresh_modeling_toolkit_widgets()
-        desktop.set_command_feedback("QuadDrawTool", obj.name if obj else "Active")
-        return {"ok": True, "item_id": iid}
+        return {"ok": bool(res and res & {"FINISHED", "RUNNING_MODAL"}), "item_id": iid, "result": str(res)}
 
     if iid == "make_live":
         res = modeling.set_live_surface(toggle=True)
@@ -247,7 +267,8 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         modeling_toolkit.refresh_modeling_toolkit_widgets()
         desktop.set_command_feedback(
             "MakeLive",
-            res.get("object_name") if res.get("active") else "Cleared",
+            (res.get("object_name") if res.get("active") else "Cleared") if res.get("ok") else res.get("error", "Make Live failed"),
+            level="INFO" if res.get("ok") else "ERROR",
         )
         return {"ok": res.get("ok", False), "item_id": iid, "result": res}
 
@@ -357,11 +378,8 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         return {"ok": True, "item_id": iid, "result": res}
 
     if iid == "border_edges":
-        try:
-            bpy.ops.landfall.toggle_border_edges()
-        except Exception:
-            pass
-        return {"ok": True, "item_id": iid}
+        res = menus.run_op("landfall.toggle_scene_flag", prop="landfall_border_show")
+        return {"ok": res == {"FINISHED"}, "item_id": iid, "result": str(res)}
 
     if iid == "uv_mode":
         try:
@@ -388,8 +406,9 @@ def execute_shelf_item(item_id: str) -> Dict[str, Any]:
         channel_box_ext.refresh_channel_box_extensions()
         return {"ok": True, "item_id": iid, "result": res}
 
-    desktop.set_command_feedback(iid, "Executed")
-    return {"ok": True, "item_id": iid}
+    error = f"No shelf action is registered for '{iid}'"
+    desktop.set_command_feedback(iid, error, level="ERROR")
+    return {"ok": False, "item_id": iid, "error": error}
 
 
 def attribute_editor_assign_shader() -> Dict[str, Any]:
@@ -462,11 +481,11 @@ def _create_shelf_tile_button(spec: Dict[str, str]):
             self.spec = item_spec
             self.setObjectName("MayaShelfTile")
             self.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
-            self.setIcon(icons.get_icon(item_spec["icon"], 20))
-            self.setIconSize(QtCore.QSize(20, 20))
+            self.setIcon(icons.get_icon(item_spec["icon"], 24))
+            self.setIconSize(QtCore.QSize(24, 24))
             self.setText(item_spec["label"])
             self.setToolTip(item_spec.get("tip", item_spec["label"]))
-            self.setFixedSize(46, 42)
+            self.setFixedSize(54, 52)
             self.setCheckable(True)
 
         def mousePressEvent(self, event):
@@ -507,7 +526,8 @@ def _create_shelf_tile_button(spec: Dict[str, str]):
             p.end()
 
     btn = _MayaShelfTileButton(spec)
-    btn.clicked.connect(lambda: execute_shelf_item(spec["id"]))
+    from .menus import _safe_call
+    btn.clicked.connect(lambda: _safe_call(lambda:execute_shelf_item(spec['id']),spec['label']))
     return btn
 
 
@@ -528,205 +548,149 @@ class MayaShelfWidget:
         # --- Row 1: Maya Status Line (32px, Figma Make `.status-line`) ---
         status_bar = QtWidgets.QFrame()
         status_bar.setObjectName("MayaStatusLine")
-        status_bar.setFixedHeight(32)
+        status_bar.setFixedHeight(40)
         slay = QtWidgets.QHBoxLayout(status_bar)
-        slay.setContentsMargins(8, 2, 8, 2)
-        slay.setSpacing(5)
+        slay.setContentsMargins(10, 4, 10, 4)
+        slay.setSpacing(10)
 
-        # 1. Cyan Hex Maya `M` Mark
-        slay.addWidget(_create_maya_hex_logo_widget())
-
-        # 2. Menu Set Selector Pill (`Modeling [F2]`)
+        # Maya Status Line order: menu set | scene | selection mode + mask | snap | live / symmetry / soft | history & render ... editor toggles
         self.cmb_menu_set = QtWidgets.QComboBox()
-        self.cmb_menu_set.addItems(
-            ["Modeling  [F2]", "Rigging  [F3]", "Animation  [F4]", "FX  [F5]", "Rendering  [F6]"]
-        )
-        self.cmb_menu_set.setFixedWidth(112)
-        self.cmb_menu_set.setFixedHeight(23)
+        self.cmb_menu_set.addItems(["Modeling  [F2]", "Rigging  [F3]", "Animation  [F4]", "FX  [F5]", "Rendering  [F6]"])
+        self.cmb_menu_set.setFixedWidth(126)
+        self.cmb_menu_set.setFixedHeight(24)
+        self.cmb_menu_set.setToolTip("Menu Set — switches the right-hand menus of the Main Menu Bar")
         self.cmb_menu_set.currentIndexChanged.connect(self._on_menu_set_changed)
         slay.addWidget(self.cmb_menu_set)
 
-        slay.addWidget(self._make_vsep())
+        def _icon_group(items):
+            grp = QtWidgets.QFrame()
+            glay = QtWidgets.QHBoxLayout(grp)
+            glay.setContentsMargins(0, 0, 0, 0)
+            glay.setSpacing(2)
+            handle = QtWidgets.QFrame()
+            handle.setObjectName("MayaCollapseHandle")
+            handle.setFixedSize(3, 18)
+            glay.addWidget(handle)
+            btns = []
+            for icon_key, tip, cb, checkable in items:
+                b = QtWidgets.QToolButton()
+                b.setObjectName("MayaStatusIcon")
+                b.setIcon(icons.get_icon(icon_key, 16))
+                b.setIconSize(QtCore.QSize(16, 16))
+                b.setFixedSize(26, 24)
+                b.setToolTip(tip)
+                b.setCheckable(checkable)
+                b.clicked.connect(cb)
+                glay.addWidget(b)
+                btns.append(b)
+            return grp, btns
 
-        # 3. Quick Maya File / .ma Interchange Trio (`Open`, `Save`, `.ma`)
-        for btn_lbl, act_id, tip in (
-            ("Open", "import_maya", "Open / Import Maya Scene (.ma / .mb)"),
-            ("Save", "save_maya", "Save As Maya Scene (.ma / .mb)"),
-            (".ma", "maya_bridge_tab", "Open Maya .ma/.mb Interchange & Reference Editor"),
-        ):
-            fb = QtWidgets.QPushButton(btn_lbl)
-            fb.setFixedHeight(21)
-            fb.setToolTip(tip)
-            if btn_lbl == ".ma":
-                fb.setStyleSheet(
-                    "background-color: #1E2C36; color: #7CC2E3; border: 1px solid #2B5B78; "
-                    "font-family: Consolas, monospace; font-weight: bold; font-size: 9px; padding: 1px 5px;"
-                )
-            fb.clicked.connect(lambda _=False, a=act_id: execute_shelf_item(a))
-            slay.addWidget(fb)
+        scene_grp, _ = _icon_group(
+            [
+                ("scene_new", "New Scene (Ctrl+N)", lambda: menus.run_op("wm.read_homefile", invoke=True), False),
+                ("scene_open", "Open Scene (Ctrl+O)", lambda: menus.run_op("landfall.project_open", invoke=True), False),
+                ("scene_save", "Save Scene (Ctrl+S)", lambda: menus.run_op("wm.save_mainfile", invoke=True), False),
+            ]
+        )
+        slay.addWidget(scene_grp)
 
-        slay.addWidget(self._make_vsep())
-
-        # 4. Selection Mask Joined Pill Bar (`MASK` + `Obj | Vtx | Edg | Face | UV`)
-        lbl_mask = QtWidgets.QLabel("MASK")
-        lbl_mask.setObjectName("MayaFieldTag")
-        slay.addWidget(lbl_mask)
+        self.mask_btns: Dict[str, Any] = {}
+        selmode_grp, sel_btns = _icon_group(
+            [
+                ("sel_hierarchy", "Select by hierarchy (selects children)", lambda: menus.run_op("object.select_grouped", type="CHILDREN_RECURSIVE", extend=True), False),
+                ("sel_object", "Select by object type (F8)", lambda: self._set_component_mode("OBJECT"), True),
+                ("sel_component", "Select by component type (F8)", lambda: self._set_component_mode("TOGGLE"), False),
+            ]
+        )
+        self.mask_btns["OBJECT"] = sel_btns[1]
+        sel_btns[1].setChecked(True)
+        slay.addWidget(selmode_grp)
 
         mask_group_frame = QtWidgets.QFrame()
         mglay = QtWidgets.QHBoxLayout(mask_group_frame)
         mglay.setContentsMargins(0, 0, 0, 0)
         mglay.setSpacing(1)
-        self.mask_btns: Dict[str, Any] = {}
         for pill_text, mode_id, tip in (
-            ("Obj", "OBJECT", "Object Mode (F8)"),
-            ("Vtx", "VERT", "Vertex Component Mode (F9)"),
-            ("Edg", "EDGE", "Edge Component Mode (F10)"),
+            ("Vertex", "VERT", "Vertex Component Mode (F9)"),
+            ("Edge", "EDGE", "Edge Component Mode (F10)"),
             ("Face", "FACE", "Face Component Mode (F11)"),
             ("UV", "UV", "UV Component Mode (F12)"),
         ):
             btn = QtWidgets.QPushButton(pill_text)
             btn.setObjectName("MayaMaskPill")
             btn.setCheckable(True)
-            btn.setChecked(mode_id == "OBJECT")
-            btn.setFixedHeight(20)
+            btn.setFixedHeight(24)
             btn.setToolTip(tip)
             btn.clicked.connect(lambda _=False, m=mode_id: self._set_component_mode(m))
             mglay.addWidget(btn)
             self.mask_btns[mode_id] = btn
         slay.addWidget(mask_group_frame)
 
-        slay.addWidget(self._make_vsep())
+        snap_grp, _ = _icon_group(
+            [
+                ("snap_grid", "Snap to Grid (Hold X)", lambda: self._trigger_snap_toggle("INCREMENT"), False),
+                ("snap_curve", "Snap to Curve / Edge (Hold C)", lambda: self._trigger_snap_toggle("EDGE"), False),
+                ("snap_point", "Snap to Point / Vertex (Hold V)", lambda: self._trigger_snap_toggle("VERTEX"), False),
+                ("snap_plane", "Snap to Surface / Face", lambda: self._trigger_snap_toggle("FACE"), False),
+                ("snap_pivot", "Edit Pivot Mode (Hold D)", lambda: self._trigger_snap_toggle("PIVOT"), False),
+            ]
+        )
+        slay.addWidget(snap_grp)
 
-        # 5. Snap Magnets (`SNAP` + Grid, Curve, Point, Pivot)
-        lbl_snap = QtWidgets.QLabel("SNAP")
-        lbl_snap.setObjectName("MayaFieldTag")
-        slay.addWidget(lbl_snap)
-
-        for snap_icon, snap_elem, tip in (
-            ("snap_grid", "INCREMENT", "Snap to Grid (Hold X)"),
-            ("snap_curve", "EDGE", "Snap to Curve / Edge (Hold C)"),
-            ("snap_point", "VERTEX", "Snap to Point / Vertex (Hold V)"),
-            ("snap_pivot", "PIVOT", "Edit Pivot Mode (Hold D)"),
-        ):
-            btn = QtWidgets.QToolButton()
-            btn.setIcon(icons.get_icon(snap_icon, 15))
-            btn.setIconSize(QtCore.QSize(15, 15))
-            btn.setFixedSize(22, 20)
-            btn.setToolTip(tip)
-            btn.clicked.connect(lambda _=False, s=snap_elem: self._trigger_snap_toggle(s))
-            slay.addWidget(btn)
-
-        # 6. Glowing Emerald `● LIVE SURFACE` Capsule Pill (Figma Make `.live-pill.on`)
-        self.btn_live_surface = QtWidgets.QPushButton("● LIVE SURFACE")
+        self.btn_live_surface = QtWidgets.QPushButton("● No Live Surface")
         self.btn_live_surface.setObjectName("MayaLiveCapsule")
-        self.btn_live_surface.setFixedHeight(22)
+        self.btn_live_surface.setFixedHeight(24)
         self.btn_live_surface.setToolTip("Make Selected Mesh Live (Scoped Surface Projection)")
         self.btn_live_surface.clicked.connect(lambda: execute_shelf_item("make_live"))
         slay.addWidget(self.btn_live_surface)
 
-        slay.addWidget(self._make_vsep())
+        self.btn_symmetry = QtWidgets.QPushButton("Symmetry: Off ▾")
+        self.btn_symmetry.setFixedHeight(24)
+        sym_menu = QtWidgets.QMenu(self.btn_symmetry)
+        style.apply_studio_style(sym_menu)
+        for axis in ("Off", "Object X", "Object Y", "Object Z"):
+            sym_menu.addAction(axis, lambda _=False, a=axis: self._set_symmetry(a))
+        self.btn_symmetry.setMenu(sym_menu)
+        slay.addWidget(self.btn_symmetry)
 
-        # 7. Soft Select [B] Pill + Symmetry Tag + History Quick Actions
-        self.btn_soft_select = QtWidgets.QPushButton("◎ Soft [B] OFF")
-        self.btn_soft_select.setFixedHeight(21)
-        self.btn_soft_select.setToolTip(
-            "Toggle Maya Soft Selection (B) / Hold B + LMB-Drag Falloff Radius Ring"
-        )
+        self.btn_soft_select = QtWidgets.QPushButton("Soft Select  B")
+        self.btn_soft_select.setFixedHeight(24)
+        self.btn_soft_select.setToolTip("Toggle Maya Soft Selection (B) / Hold B + LMB-Drag Falloff Radius Ring")
         self.btn_soft_select.clicked.connect(lambda: execute_shelf_item("soft_select"))
         slay.addWidget(self.btn_soft_select)
 
-        lbl_sym = QtWidgets.QLabel("✳ Symmetry OFF")
-        lbl_sym.setStyleSheet("color: #747C87; font-size: 9px; font-weight: 600; padding: 0 3px;")
-        slay.addWidget(lbl_sym)
-
-        for act_icon, act_id, tip in (
-            ("center_pivot", "center_pivot", "Center Pivot"),
-            ("non_def_history", "non_def_history", "Delete by Type > Non-Deformer History"),
-            ("delete_history", "delete_history", "Delete by Type > History (Alt+Shift+D)"),
-            ("freeze_transforms", "freeze_transforms", "Freeze Transformations"),
-        ):
-            btn = QtWidgets.QToolButton()
-            btn.setIcon(icons.get_icon(act_icon, 15))
-            btn.setIconSize(QtCore.QSize(15, 15))
-            btn.setFixedSize(22, 20)
-            btn.setToolTip(tip)
-            btn.clicked.connect(lambda _=False, a=act_id: execute_shelf_item(a))
-            slay.addWidget(btn)
+        hist_grp, _ = _icon_group(
+            [
+                ("history", "Undo History", lambda: menus.run_op("ed.undo_history", invoke=True), False),
+                ("render_frame", "Render the current frame", lambda: menus.run_op("render.render", invoke=True), False),
+            ]
+        )
+        slay.addWidget(hist_grp)
 
         slay.addStretch(1)
 
-        # 8. Workspace Layout Selector (`Modeling Standard ▾`) + Core Maya Sidebar Toggles + Tear-Off Windows Menu
-        lbl_ws = QtWidgets.QLabel("Workspace:")
-        lbl_ws.setStyleSheet("color: #8B949E; font-size: 10px; font-weight: 600; background: transparent;")
-        slay.addWidget(lbl_ws)
-
-        self.cmb_workspace = QtWidgets.QComboBox()
-        self.cmb_workspace.addItems(
+        toggle_grp, toggle_btns = _icon_group(
             [
-                "Modeling Standard",
-                "Maya Classic",
-                "Lookdev / Hypershade",
-                "FX & Geometry Nodes",
-                "Rigging & Deform",
-                "Sculpt & Remesh Studio",
-                "Pipeline & .ma",
+                ("panel_attr_editor", "Show or hide the Attribute Editor", lambda: self._on_workspace_toggle("ATTRIBUTE_EDITOR"), True),
+                ("panel_tool_settings", "Show or hide the Tool Settings", lambda: self._on_workspace_toggle("TOOL_SETTINGS"), True),
+                ("panel_channel_box", "Show or hide the Channel Box / Layer Editor", lambda: self._on_workspace_toggle("CHANNEL_BOX"), True),
+                ("panel_modifier_stack", "Show or hide the Modifier Stack", lambda: self._on_workspace_toggle("MODIFIER_STACK"), True),
             ]
         )
-        self.cmb_workspace.setFixedWidth(154)
-        self.cmb_workspace.setFixedHeight(22)
-        self.cmb_workspace.currentIndexChanged.connect(self._on_workspace_preset_changed)
-        slay.addWidget(self.cmb_workspace)
+        self.editor_toggles = dict(zip(("ATTRIBUTE_EDITOR", "TOOL_SETTINGS", "CHANNEL_BOX", "MODIFIER_STACK"), toggle_btns))
+        slay.addWidget(toggle_grp)
 
-        slay.addWidget(self._make_vsep())
-
-        for lbl, mode_target, tip in (
-            ("Outliner", "OUTLINER", "Toggle Left DAG Outliner"),
-            ("Ch Box", "CHANNEL_BOX", "Show Channel Box / Layer Editor (Ctrl+A)"),
-            ("Mod TK", "MODELING_TOOLKIT", "Show Maya Modeling Toolkit"),
-            ("Attr Ed", "ATTRIBUTE_EDITOR", "Show Attribute Editor (Ctrl+A)"),
-        ):
-            b = QtWidgets.QPushButton(lbl)
-            b.setFixedHeight(20)
-            b.setToolTip(tip)
-            b.clicked.connect(lambda _=False, m=mode_target: self._on_workspace_toggle(m))
-            slay.addWidget(b)
-
-        self.btn_windows_menu = QtWidgets.QPushButton("Windows ▾")
-        self.btn_windows_menu.setFixedHeight(20)
-        self.btn_windows_menu.setToolTip("Dock or Tear Off Specialized Editors (Hypershade, Shape Editor, .ma Reference, Node Graph)")
-        win_menu = QtWidgets.QMenu(self.btn_windows_menu)
-        style.apply_studio_style(win_menu)
-        for m_lbl, m_mode, is_tear_off in (
-            ("↗ Tear Off Hypershade Window", "HYPERSHADE", True),
-            ("↗ Tear Off Shape & Skin Window", "SHAPE_EDITOR", True),
-            ("↗ Tear Off .ma Reference Window", "MAYA_INTERCHANGE", True),
-            ("↗ Tear Off Tool Settings Window", "TOOL_SETTINGS", True),
-            ("Dock Hypershade to Sidebar", "HYPERSHADE", False),
-            ("Dock Shape & Skin to Sidebar", "SHAPE_EDITOR", False),
-            ("Dock .ma Reference to Sidebar", "MAYA_INTERCHANGE", False),
-        ):
-            act = win_menu.addAction(m_lbl)
-            if is_tear_off:
-                act.triggered.connect(lambda _=False, md=m_mode: self._tear_off_from_menu(md))
-            else:
-                act.triggered.connect(lambda _=False, md=m_mode: self._on_workspace_toggle(md))
-        self.btn_windows_menu.setMenu(win_menu)
-        slay.addWidget(self.btn_windows_menu)
 
         vlay.addWidget(status_bar)
+        self.maya_status_bar = status_bar
 
-        # --- Row 2: Tabbed Icon Shelf (72px, Figma Make `.shelf-zone`) ---
+        # --- Row 2: Tabbed Icon Shelf (88px: 28px tabs + 54x52 tools) ---
         self.tabs = QtWidgets.QTabWidget()
-        self.tabs.setFixedHeight(72)
+        self.tabs.setFixedHeight(88)
         self.tabs.setStyleSheet(
-            "QTabWidget::tab-bar { left: 42px; } "
-            "QTabBar::tab { height: 20px; padding: 2px 12px; }"
+            "QTabWidget::tab-bar { left: 52px; } "
+            "QTabBar::tab { height: 24px; padding: 2px 14px; }"
         )
-        corner_lbl = QtWidgets.QLabel("MAYA 2026.1  ")
-        corner_lbl.setStyleSheet(
-            "background: transparent; color: #545C66; font-size: 8px; font-weight: 700; letter-spacing: 1.0px; padding-right: 6px;"
-        )
-        self.tabs.setCornerWidget(corner_lbl, QtCore.Qt.TopRightCorner)
 
         self.tile_buttons: Dict[str, List[Any]] = {}
 
@@ -735,8 +699,8 @@ class MayaShelfWidget:
             page.setObjectName("MayaShelfBar")
             play = QtWidgets.QHBoxLayout(page)
             # 42px left margin aligns shelf tiles directly with the Outliner column past the 42px Tool Rail!
-            play.setContentsMargins(42, 2, 8, 2)
-            play.setSpacing(4)
+            play.setContentsMargins(52, 4, 8, 4)
+            play.setSpacing(6)
             self.tile_buttons[tab_name] = []
             for spec in items:
                 tile = _create_shelf_tile_button(spec)
@@ -750,8 +714,27 @@ class MayaShelfWidget:
             self.tabs.setCurrentIndex(1)
 
         vlay.addWidget(self.tabs)
+        from .zbrush_panel import SculptHeader
+        self.sculpt_header = SculptHeader()
+        vlay.addWidget(self.sculpt_header.root)
+        self.sculpt_header.root.hide()
+        # Explicit strip height avoids a stale Qt layout minimum retaining both
+        # the hidden Maya rows and Sculpt rows after a mode switch.
+        self.root.setFixedHeight(130)
         _shelf_instances.append(self)
         self.refresh_status()
+
+    def set_sculpt_mode(self, enabled):
+        self.root.setFixedHeight(54 if enabled else 130)
+        self.maya_status_bar.setVisible(not enabled)
+        self.tabs.setVisible(not enabled)
+        self.sculpt_header.root.setVisible(enabled)
+        if enabled:
+            self.sculpt_header.refresh()
+
+    @property
+    def active_shelf_name(self):
+        return 'ZBrush Sculpt' if self.sculpt_header.root.isVisible() else self.tabs.tabText(self.tabs.currentIndex())
 
     @staticmethod
     def _make_vsep():
@@ -764,15 +747,22 @@ class MayaShelfWidget:
         return sep
 
     def _on_menu_set_changed(self, idx: int) -> None:
+        from . import main_menu
+
         tab_map = {0: 1, 1: 4, 2: 4, 3: 5, 4: 3}
         if idx in tab_map and tab_map[idx] < self.tabs.count():
             self.tabs.setCurrentIndex(tab_map[idx])
+        main_menu.set_menu_set(self.cmb_menu_set.itemText(idx))
 
-    def _on_workspace_preset_changed(self, idx: int) -> None:
-        from . import desktop
+    def _set_symmetry(self, label: str) -> None:
+        import bpy
 
-        preset_text = self.cmb_workspace.itemText(idx)
-        desktop.apply_workspace_layout(preset_text)
+        obj = getattr(bpy.context, "active_object", None)
+        mesh = getattr(obj, "data", None) if obj is not None and obj.type == "MESH" else None
+        if mesh is not None:
+            for axis in "xyz":
+                setattr(mesh, f"use_mirror_{axis}", label == f"Object {axis.upper()}")
+        self.refresh_status()
 
     def _set_component_mode(self, mode_id: str) -> None:
         import bpy
@@ -816,32 +806,46 @@ class MayaShelfWidget:
 
         st = modeling.get_live_surface_state()
         if st.get("active") and st.get("object_name"):
-            self.btn_live_surface.setText(f"● LIVE: {st['object_name']}")
+            self.btn_live_surface.setText(f"● LIVE · {st['object_name']}")
             self.btn_live_surface.setStyleSheet(
-                "background-color: #1B3022; color: #B8EAC4; border: 1px solid #318B49; "
-                "border-radius: 10px; padding: 1px 9px; font-weight: 700; font-size: 9px;"
+                "background-color: #1B3022; color: #E4E7E9; border: 1px solid #3FB950; "
+                "border-radius: 12px; padding: 1px 10px; font-weight: 600; font-size: 11px;"
             )
         else:
-            self.btn_live_surface.setText("● LIVE SURFACE")
-            self.btn_live_surface.setStyleSheet(
-                "background-color: #1B3022; color: #B8EAC4; border: 1px solid #318B49; "
-                "border-radius: 10px; padding: 1px 9px; font-weight: 700; font-size: 9px;"
-            )
+            self.btn_live_surface.setText("● No Live Surface")
+            self.btn_live_surface.setStyleSheet("")
 
         soft_st = continuity.get_soft_selection_state()
         if hasattr(self, "btn_soft_select"):
             if soft_st.get("enabled"):
-                self.btn_soft_select.setText(f"◎ Soft [B]: {soft_st.get('radius', 1.0):.2f}m")
+                self.btn_soft_select.setText(f"Soft Select  B · {soft_st.get('radius', 1.0):.2f}")
                 self.btn_soft_select.setStyleSheet(
-                    "background-color: #3D2810; color: #FAD075; border: 1px solid #C88A2E; "
-                    "border-radius: 9px; padding: 1px 7px; font-weight: 700; font-size: 9px;"
+                    "background-color: #3D2810; color: #FAD075; border: 1px solid #C88A2E; font-weight: 600;"
                 )
             else:
-                self.btn_soft_select.setText("◎ Soft [B] OFF")
-                self.btn_soft_select.setStyleSheet(
-                    "background-color: #1D2126; color: #7C8590; border: 1px solid #2E333B; "
-                    "border-radius: 9px; padding: 1px 7px; font-weight: 600; font-size: 9px;"
-                )
+                self.btn_soft_select.setText("Soft Select  B")
+                self.btn_soft_select.setStyleSheet("")
+
+        try:
+            import bpy
+
+            obj = getattr(bpy.context, "active_object", None)
+            mesh = getattr(obj, "data", None) if obj is not None and obj.type == "MESH" else None
+            axis = next((a.upper() for a in "xyz" if mesh is not None and getattr(mesh, f"use_mirror_{a}", False)), None)
+            self.btn_symmetry.setText(f"Symmetry: Object {axis} ▾" if axis else "Symmetry: Off ▾")
+        except Exception:
+            pass
+
+        try:
+            from . import desktop
+
+            mode = desktop._get_right_dock().mode
+            for key, btn in getattr(self, "editor_toggles", {}).items():
+                btn.blockSignals(True)
+                btn.setChecked(key == mode)
+                btn.blockSignals(False)
+        except Exception:
+            pass
 
         for tab_tiles in self.tile_buttons.values():
             for tile in tab_tiles:
@@ -864,7 +868,7 @@ def refresh_top_shelf_status() -> None:
 class TopShelfQtDock:
     """Top `WS_CHILD` dock manager embedding `MayaShelfWidget` across the top of the 3D Viewport."""
 
-    DEFAULT_HEIGHT = 104
+    DEFAULT_HEIGHT = 130
 
     def __init__(self):
         from blendertk.ui_utils.qt_dock import QtDock
@@ -963,7 +967,7 @@ class TopShelfQtDock:
 
         if area is None:
             area, created = self._find_or_create_top_area(
-                window, height=height or self.DEFAULT_HEIGHT
+                window, height=height or round(self.DEFAULT_HEIGHT * ctrl.root.devicePixelRatioF())
             )
             if area is None:
                 return False

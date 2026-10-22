@@ -229,6 +229,7 @@ if bpy is not None:
             LANDFALL_STUDIO_OT_show_tentacle,
             LANDFALL_STUDIO_OT_btk_create_primitive,
         )
+        + commands.scene_edits.CLASSES
         + viewport.VIEWPORT_CLASSES
         + keymaps.KEYMAP_CLASSES
         + ui.UI_CLASSES
@@ -317,7 +318,12 @@ def _draw_studio_preferences(prefs_self, context):
 
 def _rollback_partial_registration(registered_classes: list) -> None:
     """Cleanly roll back any partially registered classes, handlers, or bridges if `register()` fails midway."""
+    def remove_sculpt():
+        from . import sculpt
+        if hasattr(bpy.types.Scene,'landfall_sculpt'):
+            sculpt.unregister()
     for fn in (
+        remove_sculpt,
         lambda: keymaps.remove_studio_keymaps(bpy.context),
         ui.unregister,
         viewport.unregister_hud_handler,
@@ -425,6 +431,9 @@ def register():
         # 5. Register unified Qt window desktop & workspace integration
         ui.register()
 
+        from . import sculpt
+        sculpt.register()
+
         # 6. Apply interaction profile (MAYA by default) and initialize persistent Move gizmo
         keymaps.apply_profile(bpy.context, profile=profile)
         commands.set_active_tool("TRANSLATE", axis="X")
@@ -444,6 +453,11 @@ def unregister():
         return
 
     # 1. Remove Studio keymap bindings and restore all muted native user keymap items
+    try:
+        from . import sculpt
+        sculpt.unregister()
+    except Exception as exc:
+        print(f"[landfall_studio] sculpt unregister warning: {exc}")
     try:
         keymaps.remove_studio_keymaps(bpy.context)
     except Exception as exc:

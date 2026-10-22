@@ -7,13 +7,13 @@ that projects onto the scoped `Make Live` surface (`live_surface.py`):
 - **`Shift` Quad Fill (`Shift+LMB` / `fill_quad_from_dots`):** Builds an oriented quad face from
   4 plotted dots (or boundary vertices + dots within `auto_weld_dist`), aligning the quad normal
   with the `Make Live` surface normal and welding shared boundary vertices automatically.
-- **`Tab-Drag` Extrude Strip (`Tab+LMB` / `extrude_quad_draw_strip`):** Extrudes a boundary edge
+- **Extrude Strip (Toolkit button / `extrude_quad_draw_strip`):** Extrudes a boundary edge
   along a world-space delta vector and projects the new quad strip vertices onto the `Make Live`
   surface.
 - **`Ctrl` Loop Cut (`Ctrl+LMB` / `insert_quad_draw_loop`):** Walks the connected quad ring across
   the target edge, inserts a new edge loop at `factor` (`0.0..1.0`), and projects all new loop
   vertices onto the `Make Live` surface.
-- **`Shift-Drag` Relax (`Shift+Drag` / `relax_quad_draw_verts`):** Performs Laplacian / tangent
+- **Relax (Toolkit button / `relax_quad_draw_verts`):** Performs Laplacian / tangent
   relaxation across vertices while re-projecting onto the `Make Live` surface.
 """
 
@@ -294,10 +294,10 @@ def fill_quad_from_dots(
 
     cmd_registry.record_command(
         cmd_id="landfall_studio.quad_draw_fill",
-        kwargs={"target_obj": retopo_obj.name},
-        callable_fn=lambda: fill_quad_from_dots(target_obj_or_name=retopo_obj.name),
+        kwargs={"target_obj_or_name": retopo_obj.name},
+        callable_fn=fill_quad_from_dots,
         label="Quad Draw: Fill Quad",
-        repeatable=True,
+        repeatable=not consume_dots,
     )
 
     vc = len(retopo_obj.data.vertices)
@@ -322,7 +322,7 @@ def extrude_quad_draw_strip(
     project_to_live: bool = True,
     delta_world: Sequence[float] = (0.4, 0.0, 0.0),
 ) -> Dict[str, Any]:
-    """Extrude a boundary edge strip (`Tab + Drag` in Quad Draw) and snap to `Make Live`."""
+    """Extrude a boundary edge strip by `delta_world` and snap to `Make Live`."""
     import bmesh
     from mathutils import Vector
 
@@ -520,7 +520,7 @@ def relax_quad_draw_verts(
     lock_boundary: bool = False,
     project_to_live: bool = True,
 ) -> Dict[str, Any]:
-    """Relax vertices (`Shift + Drag` in Quad Draw) via Laplacian smoothing + `Make Live` re-projection."""
+    """Relax vertices via Laplacian smoothing + `Make Live` re-projection."""
     import bmesh
     from mathutils import Vector
 
