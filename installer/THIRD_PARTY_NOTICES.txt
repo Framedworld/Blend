@@ -1,0 +1,26 @@
+Landfall Studio — third-party components
+=========================================
+
+Landfall Studio is free software released under the GNU General Public License,
+version 3 (see Blend\LICENSE). It bundles the following components, each under
+its own license. Source code for all of them is publicly available.
+
+Blender 5.2.2 LTS (blender\)
+  License: GNU General Public License v3 or later (see blender\license\ and
+  blender\copyright.txt). Source: https://projects.blender.org/blender/blender
+  This is the unmodified official Blender build; debug symbol files were omitted.
+
+Landfall (upstream\landfall)          GNU GPL v3
+tentacle (upstream\tentacle)          GNU LGPL v3
+uitk (upstream\uitk)                  GNU LGPL v3
+blendertk (upstream\blendertk)        MIT
+pythontk (upstream\pythontk)          MIT
+
+Qt for Python / PySide6 6.12 and Shiboken6 (.deps\py313\PySide6, shiboken6)
+  License: GNU LGPL v3. Qt libraries are dynamically linked and may be replaced.
+  Source: https://code.qt.io/  — Unused Qt modules were omitted from this package.
+QtPy (.deps\py313\qtpy)               MIT
+Pillow (.deps\py313\PIL)              MIT-CMU (HPND)
+packaging (.deps\py313\packaging)     Apache 2.0 / BSD
+
+To obtain the exact sources used for this build, contact the publisher.

@@ -3,6 +3,7 @@ param(
     [string[]]$Arguments = @(),
     [string]$Log,
     [int]$TimeoutSeconds = 900,
+    [int]$LingerSeconds = 0,   # keep the desktop briefly for launchers that hand off to a child
     [string]$DesktopName = 'LandfallStudioTests'
 )
 # Runs a GUI process on a separate, never-shown Windows desktop so native GUI
@@ -59,6 +60,7 @@ if ($waited -ne 0) {
     & taskkill.exe /T /F /PID $pi.dwProcessId 2>$null | Out-Null
     [HiddenDesktop]::TerminateProcess($pi.hProcess, 124) | Out-Null; Start-Sleep 1
 }
+if ($LingerSeconds -gt 0) { Start-Sleep -Seconds $LingerSeconds }
 $code = 0; [HiddenDesktop]::GetExitCodeProcess($pi.hProcess, [ref]$code) | Out-Null
 [HiddenDesktop]::CloseHandle($pi.hProcess) | Out-Null
 [HiddenDesktop]::CloseHandle($pi.hThread) | Out-Null
