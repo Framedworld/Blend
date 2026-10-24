@@ -81,6 +81,38 @@ class TestImmHeadless(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             ops.dispatch("IMM_INSERT", location=(0, 0, 1), normal=(0, 0, 1), size=0.2, part="IMM Gone")
 
+    def test_insert_into_subtool_joins_masks_and_groups(self):
+        before_objects = set(bpy.data.objects.keys())
+        before_verts = len(self.body.data.vertices)
+        ops.dispatch("IMM_TARGET", into_subtool=True)
+        res = ops.dispatch("IMM_INSERT", location=(0, 0, 1), normal=(0, 0, 1), size=0.3, part="CUBE")
+        self.assertEqual(res.get("joined_into"), "Body", res)
+        self.assertEqual(set(bpy.data.objects.keys()), before_objects)
+        me = self.body.data
+        self.assertEqual(len(me.vertices), before_verts + 8)
+        self.assertEqual(bpy.context.mode, "SCULPT")
+        mask = [d.value for d in me.attributes[".sculpt_mask"].data]
+        self.assertTrue(all(v == 1.0 for v in mask[:before_verts]))
+        self.assertTrue(all(v == 0.0 for v in mask[before_verts:]))
+        sets = me.attributes[".sculpt_face_set"].data
+        part_groups = {sets[p.index].value for p in me.polygons if all(v >= before_verts for v in p.vertices)}
+        body_groups = {sets[p.index].value for p in me.polygons if all(v < before_verts for v in p.vertices)}
+        self.assertEqual(len(part_groups), 1)
+        self.assertFalse(part_groups & body_groups)
+        top = max((self.body.matrix_world @ v.co).z for v in me.vertices[before_verts:])
+        self.assertAlmostEqual(top, 1.15, places=4)
+
+    def test_insert_into_subtool_falls_back_with_layers(self):
+        bpy.ops.object.mode_set(mode="OBJECT")
+        self.body.shape_key_add(name="Basis")
+        self.body.shape_key_add(name="Layer")
+        bpy.ops.object.mode_set(mode="SCULPT")
+        ops.dispatch("IMM_TARGET", into_subtool=True)
+        res = ops.dispatch("IMM_INSERT", location=(0, 0, 1), normal=(0, 0, 1), size=0.3, part="CUBE")
+        self.assertIn("subtool", res)
+        self.assertIn("layers", res["note"])
+        self.assertIn(res["subtool"], bpy.data.objects)
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestImmHeadless)

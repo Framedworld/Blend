@@ -83,6 +83,25 @@ def suite():
     yield from drag(blank,(blank[0]+120,blank[1]-40))
     check('blank drag still orbits with the IMM brush',ctx()['area'].spaces.active.region_3d.view_rotation!=rotation)
     check('blank drag inserts nothing',set(bpy.data.objects.keys())==before)
+    # Insert into the current SubTool: joins, masks the existing surface.
+    state.get().imm_into_subtool=True
+    with bpy.context.temp_override(**ctx()):bpy.ops.ed.undo_push(message='IMM join fixture')
+    verts=len(body.data.vertices)
+    centre=pos(Vector((0,-1,0)))
+    yield from drag(centre,(centre[0]+50,centre[1]))
+    check('into-SubTool insert adds no object',set(bpy.data.objects.keys())==before,sorted(set(bpy.data.objects.keys())-before))
+    joined=len(body.data.vertices)
+    check('into-SubTool insert joins the part geometry',joined==verts+8,(verts,joined))
+    mask=body.data.attributes.get('.sculpt_mask')
+    check('existing surface is masked, part is free',mask is not None and mask.data[0].value==1.0 and mask.data[joined-1].value==0.0)
+    with bpy.context.temp_override(**ctx()):bpy.ops.paint.mask_flood_fill(mode='INVERT')
+    yield .2
+    mask=body.data.attributes.get('.sculpt_mask')
+    check('Sculpt mode uses the same mask data (native invert flips it)',mask is not None and mask.data[0].value==0.0 and mask.data[joined-1].value==1.0)
+    ev('Z',ctrl=True);ev('Z','RELEASE',ctrl=True);yield .6
+    ev('Z',ctrl=True);ev('Z','RELEASE',ctrl=True);yield .6
+    restored=bpy.data.objects['IMM Body']  # global Undo reloads objects; old references are stale
+    check('Undo removes the joined part',len(restored.data.vertices)==verts,(len(restored.data.vertices),verts))
     landfall_studio.unregister()
     results['ok']=not results['failed'];save()
     print('IMM_GUI_RESULTS',len(results['passed']),'passed',len(results['failed']),'failed')

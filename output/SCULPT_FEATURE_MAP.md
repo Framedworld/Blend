@@ -193,7 +193,7 @@ through history. No replacement stroke engine or parallel undo stack is used.
 | Drag an IMM part onto the surface | Native: the IMM brush places the current part centred on the hit, its +Z on the surface normal, largest extent set by the drag radius (a click uses the brush size). Live circle preview while dragging. |
 | Part library / create InsertMesh from a SubTool | Adapted: primitives plus any mesh in the hidden **IMM Parts** collection; *Add Active SubTool as Part* copies the SubTool into it. Blender asset-library parts are a natural next step. |
 | Choose the part | Click empty canvas with the IMM brush; a drag there still orbits. |
-| Insert into the current SubTool with auto-masking | Boundary: each part becomes its own SubTool (merge with SubTool → Merge). Avoids rebuilding Multires/layers on the sculpted mesh. |
+| Insert into the current SubTool with auto-masking | Native: picker → *Insert into Current SubTool* joins the part, masks the existing surface and gives the part its own polygroup (Face Set); DynaMesh then fuses it. With subdivision levels, layers or Sculptris Pro active it inserts as a new SubTool and says why (ZBrush also blocks topology changes there). |
 | Undo | One native Undo removes the insert; brush, part and dials are tool state and survive Undo/Redo. |
 
-Evidence: `test_imm_headless.py` 4/4, `test_imm_gui.py` 13/13 (hidden-desktop native events).
+Evidence: `test_imm_headless.py` 6/6, `test_imm_gui.py` 18/18, `test_imm_undo_gui.py` 5/5 (hidden-desktop native events; undo also confirmed on screen).

@@ -380,6 +380,46 @@ def _imm_mesh(part):
     return source.data.copy(),part.removeprefix('IMM ')
 
 
+def _imm_join_blocker(src):
+    """Why the part cannot join the sculpted SubTool, or '' when it can."""
+    m=multires()
+    if m and m.total_levels>0:
+        return 'the SubTool has subdivision levels'
+    if src.data.shape_keys is not None:
+        return 'the SubTool has layers'
+    if getattr(src,'use_dynamic_topology_sculpting',False):
+        return 'Sculptris Pro is on'
+    if src.data.users>1 or src.library or src.data.library:
+        return 'the SubTool shares or links its mesh'
+    return ''
+
+
+def _imm_join(src,part):
+    """Join `part` into `src`, mask the existing surface, give the part a group."""
+    import bmesh
+    from mathutils import Matrix
+    old_count=len(src.data.vertices)
+    faces=src.data.attributes.get('.sculpt_face_set')
+    next_group=(max((d.value for d in faces.data),default=0)+1) if faces else 2
+    with object_mode():
+        bm=bmesh.new();bm.from_mesh(src.data)
+        local=src.matrix_world.inverted()@part.matrix_world
+        piece=part.data.copy();piece.transform(local)
+        bm.from_mesh(piece);bm.to_mesh(src.data);bm.free()
+        bpy.data.meshes.remove(piece)
+        mesh=src.data
+        mask=mesh.attributes.get('.sculpt_mask') or mesh.attributes.new('.sculpt_mask','FLOAT','POINT')
+        values=[1.0]*old_count+[0.0]*(len(mesh.vertices)-old_count)
+        mask.data.foreach_set('value',values)
+        sets=mesh.attributes.get('.sculpt_face_set') or mesh.attributes.new('.sculpt_face_set','INT','FACE')
+        if not faces:
+            sets.data.foreach_set('value',[1]*len(mesh.polygons))
+        for poly in mesh.polygons:
+            if all(v>=old_count for v in poly.vertices):sets.data[poly.index].value=next_group
+        mesh.update()
+    return len(src.data.vertices)-old_count
+
+
 def imm_insert(location,normal,size,part=None):
     """Insert a part on the surface as a new SubTool (ZBrush InsertMesh).
 
@@ -397,6 +437,15 @@ def imm_insert(location,normal,size,part=None):
     for coll in src.users_collection or (bpy.context.collection,):
         coll.objects.link(obj);break
     obj.matrix_world=Matrix.Translation(Vector(location))@rotation@Matrix.Diagonal((factor,factor,factor,1))
+    if state.get().imm_into_subtool:
+        blocker=_imm_join_blocker(src)
+        if not blocker:
+            mesh_data=obj.data
+            added=_imm_join(src,obj)
+            bpy.data.objects.remove(obj);bpy.data.meshes.remove(mesh_data)
+            return {'ok':True,'joined_into':src.name,'part':part,'size':float(size),'part_vertices':added}
+        return {'ok':True,'subtool':obj.name,'part':part,'size':float(size),
+                'note':f'Inserted as a new SubTool because {blocker}.'}
     return {'ok':True,'subtool':obj.name,'part':part,'size':float(size)}
 
 
@@ -682,6 +731,8 @@ def dispatch(command_id, **kw):
     if action=='ZREMESHER': return remesh(True)
     if action in ('APPEND','INSERT'): return append(kw.get('primitive','SPHERE'),action=='INSERT')
     if action=='IMM_INSERT': return imm_insert(kw['location'],kw['normal'],kw['size'],kw.get('part'))
+    if action=='IMM_TARGET':
+        s.imm_into_subtool=bool(kw.get('into_subtool'));return {'ok':True,'into_subtool':s.imm_into_subtool}
     if action=='IMM_PART':
         if kw.get('part')=='__ACTIVE__':return imm_add_part()
         s.imm_part=kw['part'];return {'ok':True,'part':s.imm_part}
@@ -888,10 +939,10 @@ def run(command_id, **kw):
             bpy.ops.ed.undo_push(message='Sculpt modifier baseline')
         if adds_object:_global_undo_push('Before Insert Mesh')
         bpy.ops.landfall_studio.sculpt_command('EXEC_DEFAULT',undoable,action=command_id,arguments=json.dumps(kw))
-        part=bpy.data.objects.get(last_result.get('subtool','')) if adds_object and last_result.get('ok') else None
-        if part is not None:
-            # The new part is in Object mode, so this records a global
-            # (memfile) step that one Undo can remove, strokes intact.
+        if adds_object and last_result.get('ok'):
+            # A new part object is in Object mode; a joined part leaves no
+            # such object, and no context object also gives a global step.
+            part=bpy.data.objects.get(last_result.get('subtool',''))
             _global_undo_push('Insert Mesh',part)
     from ..ui.desktop import set_command_feedback
     set_command_feedback('Sculpt · '+command_id,str(last_result),'INFO' if last_result.get('ok') else 'ERROR')

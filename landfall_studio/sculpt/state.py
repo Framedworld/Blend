@@ -41,6 +41,8 @@ class SculptState(bpy.types.PropertyGroup):
     auto_activate: BoolProperty(name="Automatic ZBrush Sculpt Studio", default=True)
     bbrush_enabled: BoolProperty(name="Bbrush pen controls", default=True)
     active_zbrush_brush: StringProperty(default="Standard")
+    imm_into_subtool: BoolProperty(name='Insert into SubTool', default=False,
+        description='Join inserted parts into the sculpted SubTool and mask the rest, as ZBrush does')
     imm_part: StringProperty(name='IMM Part', default='SPHERE',
         description='Part the IMM brush inserts: a primitive or a mesh in the IMM Parts collection')
     z_mode: EnumProperty(items=[('ADD', 'ZAdd', ''), ('SUBTRACT', 'ZSub', '')], default='ADD', update=apply_brush_settings)

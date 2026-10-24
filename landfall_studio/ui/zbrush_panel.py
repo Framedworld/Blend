@@ -291,6 +291,9 @@ def show_imm_picker():
     items=[(('● ' if p==current else '')+(p.title() if p in ops.IMM_PRIMITIVES else p.removeprefix('IMM ')),
             lambda name=p:command('IMM_PART',part=name)) for p in ops.imm_parts()]
     items.append(('Add Active SubTool as Part',lambda:command('IMM_PART',part='__ACTIVE__')))
+    into=state.get().imm_into_subtool
+    items.append((('● ' if not into else '')+'Insert as New SubTool',lambda:command('IMM_TARGET',into_subtool=False)))
+    items.append((('● ' if into else '')+'Insert into Current SubTool (mask the rest)',lambda:command('IMM_TARGET',into_subtool=True)))
     return show_menu(items)
 
 

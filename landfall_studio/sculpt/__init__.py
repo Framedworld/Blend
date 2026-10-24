@@ -246,7 +246,7 @@ def _poll():
 _settle_checks=0
 # Brush choice and its dials are tool state, not model data: ZBrush and Blender
 # never undo them. They live on the scene, so carry them across Undo/Redo.
-_TOOL_FIELDS=('active_zbrush_brush','imm_part','draw_size','z_intensity','focal_shift','lazy_mouse','sculptris_detail')
+_TOOL_FIELDS=('active_zbrush_brush','imm_part','imm_into_subtool','draw_size','z_intensity','focal_shift','lazy_mouse','sculptris_detail')
 _tool_state=None
 
 
