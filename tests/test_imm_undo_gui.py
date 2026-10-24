@@ -50,10 +50,14 @@ def suite():
     a=pos(body.matrix_world@Vector((-.3,-.8,.5)));b=pos(body.matrix_world@Vector((.3,-.8,.5)))
     yield from drag(a,b);snap('stroke 1')
     yield from drag((a[0],a[1]-20),(b[0],b[1]-20));snap('stroke 2')
-    from landfall_studio.sculpt import ops as sculpt_ops
-    sculpt_ops.run('BRUSH',name='IMM Primitives');yield .4
+    variant=os.environ.get('PROBE_VARIANT','all')  # diagnostic variants: no_new_handlers, direct, keys
+    if variant=='keys':  # the ZBrush habit: pick the brush with B, I, M
+        for k in ('B','I','M'):
+            ev(k);ev(k,'RELEASE');yield .4
+    else:
+        from landfall_studio.sculpt import ops as sculpt_ops
+        sculpt_ops.run('BRUSH',name='IMM Primitives');yield .4
     snap('after brush pick')
-    variant=os.environ.get('PROBE_VARIANT','all')  # diagnostic variants: no_new_handlers, direct
     report['variant']=variant
     import landfall_studio.sculpt as sculpt_pkg
     if variant=='no_new_handlers':
