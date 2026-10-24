@@ -23,4 +23,13 @@ QtPy (.deps\py313\qtpy)               MIT
 Pillow (.deps\py313\PIL)              MIT-CMU (HPND)
 packaging (.deps\py313\packaging)     Apache 2.0 / BSD
 
-To obtain the exact sources used for this build, contact the publisher.
+Source code
+-----------
+Landfall Studio and the upstream libraries are Python and ship as readable
+source in this folder (Blend\ and upstream\), including any local changes.
+Public repositories:
+  Landfall Studio   https://github.com/Framedworld/Blend
+  landfall          https://github.com/lucafrancescoorlandi/landfall
+  tentacle, uitk, blendertk, pythontk   https://github.com/m3trik
+Blender and Qt for Python are unmodified releases; their sources are at the
+addresses above. The exact commits in this build are listed below.

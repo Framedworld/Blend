@@ -25,6 +25,7 @@ $suites = @(
     @('maya_group', 'test_maya_group_headless.py', $false, $false, $null),
     @('sculptris_pro', 'test_sculptris_pro_headless.py', $false, $false, $null),
     @('maya_ascii', 'test_maya_ascii_headless.py', $false, $false, $null),
+    @('report_problem', 'test_report_problem_headless.py', $false, $false, $null),
     @('imm', 'test_imm_headless.py', $false, $false, $null),
     @('controls_data', 'test_controls_data.py', $false, $false, $null),
     @('phase01', 'test_phase01_headless.py', $false, $false, $null),

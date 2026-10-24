@@ -118,6 +118,42 @@ if bpy is not None:
             )
             return {"FINISHED"}
 
+    class LANDFALL_STUDIO_OT_report_problem(bpy.types.Operator):
+        """Save logs and system details to a zip on the Desktop for the Landfall Studio team."""
+
+        bl_idname = "landfall_studio.report_problem"
+        bl_label = "Report a Problem"
+        bl_description = "Save logs and system details (not your scene) to a zip on your Desktop to send to us"
+
+        def execute(self, context):
+            import os
+            import subprocess
+            import zipfile
+            from datetime import datetime
+            from pathlib import Path
+
+            profile = os.environ.get("LANDFALL_STUDIO_PROFILE")
+            logs = Path(profile) / "logs" if profile else Path(__file__).resolve().parents[1] / "output" / "problem_report"
+            logs.mkdir(parents=True, exist_ok=True)
+            try:
+                bpy.ops.wm.sysinfo(filepath=str(logs / "sysinfo.txt"))
+            except Exception as exc:
+                (logs / "sysinfo.txt").write_text(f"sysinfo failed: {exc}", encoding="utf-8")
+            (logs / "diagnostics.txt").write_text(diagnostics.format_report(diagnostics.get_report()), encoding="utf-8")
+
+            # The installed launcher builds the zip, so a crash report and this one match.
+            launcher = os.environ.get("LANDFALL_STUDIO_LAUNCHER")
+            if launcher and os.path.isfile(launcher):
+                subprocess.Popen([launcher, "--report"], close_fds=True)
+                self.report({"INFO"}, "Saving a problem report to your Desktop…")
+                return {"FINISHED"}
+            target = logs / f"Landfall Studio report {datetime.now():%Y-%m-%d %H%M%S}.zip"
+            with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
+                for name in ("sysinfo.txt", "diagnostics.txt"):
+                    zf.write(logs / name, name)
+            self.report({"INFO"}, f"Problem report saved to {target}")
+            return {"FINISHED"}
+
     class LANDFALL_STUDIO_OT_show_tentacle(bpy.types.Operator):
         """Open the Tentacle Qt Marking Menu / Switchboard window."""
 
@@ -226,6 +262,7 @@ if bpy is not None:
         (
             LANDFALL_STUDIO_OT_install_dependencies,
             LANDFALL_STUDIO_OT_diagnostics_report,
+            LANDFALL_STUDIO_OT_report_problem,
             LANDFALL_STUDIO_OT_show_tentacle,
             LANDFALL_STUDIO_OT_btk_create_primitive,
         )

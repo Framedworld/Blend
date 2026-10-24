@@ -1,5 +1,7 @@
 // Shared by the launcher and the installer.
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 
@@ -11,6 +13,35 @@ static class Install
     public static string ProfileRoot()
     {
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Landfall Studio");
+    }
+
+    // Top-level entries of an install. A folder holding only these is ours, even
+    // after an interrupted update removed some of them.
+    static readonly string[] Shipped = { "Landfall Studio.exe", "blender", "Blend", "upstream", ".deps", "Read Me First.txt", "QUICK_START.md", "THIRD_PARTY_NOTICES.txt" };
+
+    public static bool IsOurs(string folder)
+    {
+        if (!Directory.Exists(folder)) return false;
+        string[] entries = Directory.GetFileSystemEntries(folder);
+        if (entries.Length == 0) return false;
+        foreach (string e in entries)
+            if (Array.FindIndex(Shipped, n => n.Equals(Path.GetFileName(e), StringComparison.OrdinalIgnoreCase)) < 0) return false;
+        return true;
+    }
+
+    // Studio processes started from this folder (other than the caller).
+    public static List<string> RunningFrom(string folder)
+    {
+        string prefix = Path.GetFullPath(folder).TrimEnd('\\') + "\\";
+        var found = new List<string>();
+        int self = Process.GetCurrentProcess().Id;
+        foreach (string name in new[] { "blender", "blender-launcher", "Landfall Studio" })
+            foreach (Process p in Process.GetProcessesByName(name))
+            {
+                try { if (p.Id != self && p.MainModule.FileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) found.Add(p.ProcessName); }
+                catch { }  // exited, or not ours to inspect
+            }
+        return found;
     }
 
     public static string DefaultFolder()
@@ -32,7 +63,7 @@ static class Shortcuts
         return new[] { Path.Combine(d, "Landfall Studio.lnk"), Path.Combine(d, "Landfall Sculpt.lnk") };
     }
 
-    public static void Create(string path, string target, string arguments, string description)
+    public static void Create(string path, string target, string arguments, string description, string icon = null)
     {
         Type shellType = Type.GetTypeFromProgID("WScript.Shell");
         object shell = Activator.CreateInstance(shellType);
@@ -42,7 +73,7 @@ static class Shortcuts
         t.InvokeMember("Arguments", BindingFlags.SetProperty, null, link, new object[] { arguments });
         t.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, link, new object[] { Path.GetDirectoryName(target) });
         t.InvokeMember("Description", BindingFlags.SetProperty, null, link, new object[] { description });
-        t.InvokeMember("IconLocation", BindingFlags.SetProperty, null, link, new object[] { target + ",0" });
+        t.InvokeMember("IconLocation", BindingFlags.SetProperty, null, link, new object[] { (icon ?? target) + ",0" });
         t.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
     }
 

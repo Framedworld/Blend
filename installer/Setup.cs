@@ -13,8 +13,6 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Landfall Studio Setup")]
-[assembly: AssemblyProduct("Landfall Studio")]
-[assembly: AssemblyVersion("0.9.0.1")]
 
 sealed class SubStream : Stream
 {
@@ -58,28 +56,62 @@ static class Installer
         return new SubStream(exe, exe.Length - 16 - size, size);
     }
 
-    static bool IsOurInstall(string folder)
+    static long required = -1;
+
+    // Unpacked size plus some room for Blender's first-start caches.
+    public static long RequiredBytes()
     {
-        return File.Exists(Path.Combine(folder, "Landfall Studio.exe")) && Directory.Exists(Path.Combine(folder, "blender"));
+        if (required < 0)
+        {
+            FileStream exe;
+            using (var payload = OpenPayload(out exe))
+            using (exe)
+            using (var zip = new ZipArchive(payload, ZipArchiveMode.Read))
+            {
+                long sum = 0;
+                foreach (ZipArchiveEntry entry in zip.Entries) sum += entry.Length;
+                required = sum + sum / 10;
+            }
+        }
+        return required;
     }
 
     public static string Validate(string folder)
     {
         if (string.IsNullOrWhiteSpace(folder)) return "Choose an installation folder.";
-        if (Directory.Exists(folder) && Directory.GetFileSystemEntries(folder).Length > 0 && !IsOurInstall(folder))
+        try { folder = Path.GetFullPath(folder); }
+        catch (Exception) { return "That is not a valid folder path."; }
+        bool ours = Install.IsOurs(folder);
+        if (Directory.Exists(folder) && Directory.GetFileSystemEntries(folder).Length > 0 && !ours)
             return "That folder already contains other files. Choose an empty folder or the default location.";
+        if (ours && Install.RunningFrom(folder).Count > 0)
+            return "Landfall Studio is open. Save your work, close it, then click Install again.";
+        long free = new DriveInfo(Path.GetPathRoot(folder)).AvailableFreeSpace;
+        long needed = RequiredBytes() - (ours ? FolderBytes(folder) : 0);
+        if (free < needed)
+            return "There is not enough free disk space. Landfall Studio needs " + Megabytes(needed) + " and the drive has " + Megabytes(free) + " free.";
         return null;
+    }
+
+    public static string Megabytes(long bytes) { return (bytes / (1024 * 1024)).ToString("N0") + " MB"; }
+
+    static long FolderBytes(string folder)
+    {
+        long sum = 0;
+        foreach (string f in Directory.GetFiles(folder, "*", SearchOption.AllDirectories)) sum += new FileInfo(f).Length;
+        return sum;
     }
 
     public static void Run(string folder, bool desktopShortcuts, Action<int, string> progress, bool register = true)
     {
         folder = Path.GetFullPath(folder);
-        if (IsOurInstall(folder))
+        if (Install.IsOurs(folder))
         {
             progress(0, "Removing the previous version...");
+            // If this fails part-way the folder still counts as ours, so trying again finishes the job.
             try { Directory.Delete(folder, true); }
-            catch (IOException) { throw new IOException("Close Landfall Studio before installing, then try again."); }
-            catch (UnauthorizedAccessException) { throw new IOException("Close Landfall Studio before installing, then try again."); }
+            catch (IOException) { throw new IOException("Some Landfall Studio files are in use. Close Landfall Studio, then try again."); }
+            catch (UnauthorizedAccessException) { throw new IOException("Some Landfall Studio files are in use. Close Landfall Studio, then try again."); }
         }
         Directory.CreateDirectory(folder);
         FileStream exe;
@@ -112,6 +144,8 @@ static class Installer
         Directory.CreateDirectory(menu);
         Shortcuts.Create(Path.Combine(menu, "Landfall Studio.lnk"), launcher, "", "Modeling, the Maya way");
         Shortcuts.Create(Path.Combine(menu, "Landfall Sculpt.lnk"), launcher, "--sculpt", "Sculpting, the ZBrush way");
+        Shortcuts.Create(Path.Combine(menu, "Read Me First.lnk"), Path.Combine(folder, "Read Me First.txt"), "", "Getting started, controls and reporting problems", launcher);
+        Shortcuts.Create(Path.Combine(menu, "Report a Problem.lnk"), launcher, "--report", "Save logs to your Desktop to send to the Landfall Studio team");
         Shortcuts.Create(Path.Combine(menu, "Uninstall Landfall Studio.lnk"), launcher, "--uninstall", "Remove Landfall Studio");
         if (desktopShortcuts)
         {
@@ -147,19 +181,25 @@ static class Installer
             else if (a.StartsWith("/D=", StringComparison.OrdinalIgnoreCase)) folder = a.Substring(3);
             else if (a.Equals("/NOSHORTCUTS", StringComparison.OrdinalIgnoreCase)) register = false;
         }
+        // A windowed exe has no console; leave the reason where testers can find it.
+        string setupLog = Path.Combine(Path.GetTempPath(), "LandfallStudioSetup.log");
         if (silent)
         {
-            string problem = Validate(folder);
-            if (problem != null) { Console.Error.WriteLine(problem); return 2; }
-            try { Run(folder, false, (p, s) => { }, register); return 0; }
-            catch (Exception exc)
+            try
             {
-                // A windowed exe has no console; leave the reason where testers can find it.
-                File.WriteAllText(Path.Combine(Path.GetTempPath(), "LandfallStudioSetup.log"), exc.ToString());
-                return 1;
+                string problem = Validate(folder);
+                if (problem != null) { File.WriteAllText(setupLog, problem); return 2; }
+                Run(folder, false, (p, s) => { }, register); return 0;
             }
+            catch (Exception exc) { File.WriteAllText(setupLog, exc.ToString()); return 1; }
         }
         Application.EnableVisualStyles();
+        try { RequiredBytes(); }
+        catch (Exception exc)
+        {
+            MessageBox.Show(exc.Message, "Landfall Studio Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return 1;
+        }
         Application.Run(new SetupForm(folder));
         return 0;
     }
@@ -193,9 +233,9 @@ sealed class SetupForm : Form
         };
         desktop.Text = "Add Landfall Studio and Landfall Sculpt to the desktop"; desktop.Checked = true; desktop.SetBounds(22, 170, 500, 24);
         bar.SetBounds(22, 204, 516, 18);
-        status.SetBounds(22, 228, 516, 22); status.Text = "About 1.5 GB of disk space is needed.";
+        status.SetBounds(22, 228, 516, 22); status.Text = "Needs " + Installer.Megabytes(Installer.RequiredBytes()) + " of disk space.";
         launch.Text = "Start Landfall Studio now"; launch.Checked = true; launch.Visible = false; launch.SetBounds(22, 258, 300, 24);
-        install.Text = "Install"; install.SetBounds(450, 254, 88, 30);
+        install.Text = Install.IsOurs(folder) ? "Update" : "Install"; install.SetBounds(450, 254, 88, 30);
         install.Click += OnInstall;
         Controls.AddRange(new Control[] { title, blurb, where, folderBox, browse, desktop, bar, status, launch, install });
         AcceptButton = install;
@@ -219,7 +259,7 @@ sealed class SetupForm : Form
                 Installer.Run(folder, desk, (p, s) => BeginInvoke((Action)(() => { bar.Value = p; status.Text = s; })));
                 BeginInvoke((Action)(() =>
                 {
-                    finished = true; status.Text = "Landfall Studio is installed. Find it in the Start menu.";
+                    finished = true; status.Text = "Installed. Find Landfall Studio and \"Read Me First\" in the Start menu.";
                     install.Text = "Finish"; install.Enabled = true; launch.Visible = true;
                 }));
             }

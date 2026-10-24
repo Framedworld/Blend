@@ -49,7 +49,7 @@ def view3d_override() -> Dict[str, Any]:
 # Interactive commands that open their own file-browser window; everything else
 # invoked from a menu draws or works inside the viewport.
 _SEPARATE_WINDOW_OPS = ("import", "export", "_open", "open_mainfile", "save_as", "find_missing",
-                        "userpref", "render.render", "import_maya_ascii", "export_maya_ascii")
+                        "userpref", "recover_auto_save", "render.render", "import_maya_ascii", "export_maya_ascii")
 
 
 def _bring_cursor_to_viewport(override: Dict[str, Any], op_path: str) -> bool:
@@ -300,6 +300,10 @@ FILE_MENU = [
     O("Save Scene As…", "landfall.project_save_as", invoke=True, hint="Ctrl+Shift+S"),
     O("Make External Paths Relative", "landfall.paths_relative"),
     O("Find Missing Files…", "file.find_missing_files", invoke=True),
+    S("Recover", [
+        O("Last Session", "wm.recover_last_session", invoke=True),
+        O("Auto Save…", "wm.recover_auto_save", invoke=True),
+    ]),
     SEP,
     H("Maya Interchange"),
     F("Import Maya Scene (.ma / .mb)…", _shelf("import_maya")),
@@ -472,6 +476,7 @@ def _studio_controls():
 
 HELP_MENU = [
     F('Studio Controls…',_studio_controls),
+    O("Report a Problem…", "landfall_studio.report_problem"),
     O("Landfall Studio Diagnostics", "landfall_studio.diagnostics_report"),
     O("Blender Manual", "wm.url_open", url="https://docs.blender.org/manual/en/latest/"),
 ]

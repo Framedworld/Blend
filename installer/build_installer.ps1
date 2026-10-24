@@ -11,8 +11,21 @@ $studio = Split-Path $installerDir -Parent
 $workspace = Split-Path $studio -Parent
 if (-not $OutDir) { $OutDir = Join-Path $studio 'output\installer' }
 $stage = Join-Path $OutDir 'stage'
-$csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$fw = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319'
+$csc = Join-Path $fw 'csc.exe'
 $version = (Select-String -Path (Join-Path $installerDir 'Common.cs') -Pattern 'Version = "([^"]+)"').Matches[0].Groups[1].Value
+# Common.cs holds the only copy of the version; the exe metadata is stamped from it.
+if ($version -notmatch '^(\d+)\.(\d+)\.(\d+)(?:-[a-z]+\.(\d+))?$') { throw "Unexpected version format: $version" }
+$numeric = '{0}.{1}.{2}.{3}' -f $Matches[1], $Matches[2], $Matches[3], $(if ($Matches[4]) { $Matches[4] } else { 0 })
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+$assemblyInfo = Join-Path $OutDir 'AssemblyInfo.cs'
+@"
+[assembly: System.Reflection.AssemblyProduct("Landfall Studio")]
+[assembly: System.Reflection.AssemblyCompany("Framedworld")]
+[assembly: System.Reflection.AssemblyVersion("$numeric")]
+[assembly: System.Reflection.AssemblyFileVersion("$numeric")]
+[assembly: System.Reflection.AssemblyInformationalVersion("$version")]
+"@ | Set-Content -Path $assemblyInfo -Encoding UTF8
 
 $blenderVersion = (& (Join-Path $BlenderDir 'blender.exe') --version 2>&1 | Select-Object -First 1).ToString()
 if ($blenderVersion -notmatch '^Blender 5\.2\.') { throw "Expected Blender 5.2 at $BlenderDir, found: $blenderVersion" }
@@ -41,7 +54,7 @@ Copy-Tree (Join-Path $studio 'landfall_studio') (Join-Path $s 'landfall_studio')
 New-Item -ItemType Directory -Force -Path (Join-Path $s 'scripts') | Out-Null
 Copy-Item (Join-Path $studio 'scripts\open_studio.py') (Join-Path $s 'scripts')
 foreach ($f in 'LICENSE', 'README.md', 'blender_manifest.toml', '__init__.py') { Copy-Item (Join-Path $studio $f) $s }
-Copy-Item (Join-Path $studio 'output\FRIEND_QUICK_START.md') (Join-Path $stage 'QUICK_START.md')
+Copy-Item (Join-Path $installerDir 'READ_ME_FIRST.txt') (Join-Path $stage 'Read Me First.txt')
 
 # 3. Upstream libraries without history, tests or docs.
 foreach ($lib in 'blendertk', 'landfall', 'pythontk', 'tentacle', 'uitk') {
@@ -68,9 +81,16 @@ foreach ($plugin in 'assetimporters','canbus','designer','geometryloaders','geos
 # 5. Launcher and notices.
 & python -c "from PIL import Image; Image.open(r'$studio\docs\landfall-icon.png').convert('RGBA').save(r'$icon', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])"
 if (-not (Test-Path $icon)) { throw 'Icon conversion failed' }
-& $csc /nologo /target:winexe /optimize+ "/win32icon:$icon" "/out:$(Join-Path $stage 'Landfall Studio.exe')" /r:System.Windows.Forms.dll (Join-Path $installerDir 'Launcher.cs') (Join-Path $installerDir 'Common.cs')
+& $csc /nologo /target:winexe /optimize+ "/win32icon:$icon" "/out:$(Join-Path $stage 'Landfall Studio.exe')" /r:System.Windows.Forms.dll /r:System.Drawing.dll "/r:$fw\System.IO.Compression.dll" "/r:$fw\System.IO.Compression.FileSystem.dll" (Join-Path $installerDir 'Launcher.cs') (Join-Path $installerDir 'Common.cs') $assemblyInfo
 if ($LASTEXITCODE) { throw 'Launcher compile failed' }
-Copy-Item (Join-Path $installerDir 'THIRD_PARTY_NOTICES.txt') $stage
+$notices = [Collections.Generic.List[string]](Get-Content (Join-Path $installerDir 'THIRD_PARTY_NOTICES.txt'))
+$notices.Add(''); $notices.Add("Commits in this build ($version, built $(Get-Date -Format 'yyyy-MM-dd')):")
+foreach ($repo in @($studio) + @('landfall', 'tentacle', 'uitk', 'blendertk', 'pythontk' | ForEach-Object { Join-Path $workspace "upstream\$_" })) {
+    $changed = @(git -C $repo status --porcelain --untracked-files=no).Count
+    $notices.Add(('  {0,-16} {1}{2}' -f (Split-Path $repo -Leaf), (git -C $repo rev-parse HEAD), $(if ($changed) { " plus local changes in $changed file(s), included as source" } else { '' })))
+}
+$notices.Add("  Blender          $blenderVersion")
+$notices | Set-Content -Path (Join-Path $stage 'THIRD_PARTY_NOTICES.txt') -Encoding UTF8
 
 # 6. Precompile Python with Blender's own interpreter for a faster first start.
 $py = Get-ChildItem (Join-Path $stage 'blender\5.2\python\bin') -Filter 'python*.exe' | Select-Object -First 1
@@ -83,8 +103,7 @@ Write-Host 'Compressing payload...'
 [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $payload, [System.IO.Compression.CompressionLevel]::Optimal, $false)
 }
 $stub = Join-Path $OutDir 'setup_stub.exe'
-$fw = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319'
-& $csc /nologo /target:winexe /optimize+ "/win32icon:$icon" "/out:$stub" /r:System.Windows.Forms.dll /r:System.Drawing.dll "/r:$fw\System.IO.Compression.dll" "/r:$fw\System.IO.Compression.FileSystem.dll" (Join-Path $installerDir 'Setup.cs') (Join-Path $installerDir 'Common.cs')
+& $csc /nologo /target:winexe /optimize+ "/win32icon:$icon" "/out:$stub" /r:System.Windows.Forms.dll /r:System.Drawing.dll "/r:$fw\System.IO.Compression.dll" "/r:$fw\System.IO.Compression.FileSystem.dll" (Join-Path $installerDir 'Setup.cs') (Join-Path $installerDir 'Common.cs') $assemblyInfo
 if ($LASTEXITCODE) { throw 'Setup compile failed' }
 $setup = Join-Path $OutDir ("LandfallStudioSetup-$version.exe")
 $out = [IO.File]::Create($setup)
