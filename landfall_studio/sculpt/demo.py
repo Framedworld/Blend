@@ -31,4 +31,9 @@ def create_demo():
         for field in ('show_floor','show_ortho_grid','show_axis_x','show_axis_y','show_axis_z'):setattr(sp.overlay,field,False)
         sp.shading.background_type='VIEWPORT';sp.shading.background_color=(.09,.10,.115)
         bpy.ops.view3d.view_axis(type='FRONT');sp.region_3d.view_location=(0,0,.15);sp.region_3d.view_distance=5
+        # Python-built scenes record no history. Checkpoint the finished demo as
+        # a global step (through an Object-mode context object) so Undo steps
+        # back through the artist's work instead of to the empty startup file.
+        with bpy.context.temp_override(active_object=root,object=root,selected_objects=[root]):
+            bpy.ops.ed.undo_push(message='Sculpt demo')
     return {'object':body.name,'vertices':len(body.data.vertices),'layer':body.active_shape_key.name}

@@ -48,6 +48,7 @@ $suites = @(
     @('inspector_history', 'test_scene_edit_history_gui.py', $true, $false, 'scene_edit_history_gui{tag}.json'),
     @('controls', 'test_controls_gui.py', $true, $false, 'controls_gui_results.json'),
     @('imm_gui', 'test_imm_gui.py', $true, $false, 'imm_gui{tag}.json'),
+    @('imm_undo_gui', 'test_imm_undo_gui.py', $true, $true, 'imm_undo_gui{tag}.json'),
     @('full_ux', 'test_full_ux_gui.py', $true, $false, 'full_ux_gui{tag}.json'),
     @('sculpt_controls', 'test_zbrush_sculpt_gui.py', $true, $false, 'zbrush_sculpt_gui_results.json'),
     @('integrated_workflows', 'test_replacement_workflows_gui.py', $true, $false, 'replacement_workflows_gui.json'),

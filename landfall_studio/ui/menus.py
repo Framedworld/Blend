@@ -46,6 +46,31 @@ def view3d_override() -> Dict[str, Any]:
     return ov
 
 
+# Interactive commands that open their own file-browser window; everything else
+# invoked from a menu draws or works inside the viewport.
+_SEPARATE_WINDOW_OPS = ("import", "export", "_open", "open_mainfile", "save_as", "find_missing",
+                        "userpref", "render.render", "import_maya_ascii", "export_maya_ascii")
+
+
+def _bring_cursor_to_viewport(override: Dict[str, Any], op_path: str) -> bool:
+    """Start in-window popups and modal tools in the viewport, not under the menu.
+
+    Blender opens popups and starts modal tools at the mouse position. After a
+    click in Studio's Qt menu bar that position lies under the Qt panels, which
+    always draw above Blender's own UI, hiding the popup.
+    """
+    if any(token in op_path for token in _SEPARATE_WINDOW_OPS):
+        return False
+    window, region = override.get("window"), override.get("region")
+    if window is None or region is None:
+        return False
+    try:
+        window.cursor_warp(int(region.x + region.width / 2), int(region.y + region.height / 2))
+        return True
+    except Exception:
+        return False
+
+
 def run_op(op_path: str, invoke: bool = False, **props: Any) -> Any:
     """Run `module.op` with a main-window 3D View override; reports failures to the command line."""
     import bpy
@@ -60,7 +85,10 @@ def run_op(op_path: str, invoke: bool = False, **props: Any) -> Any:
         if op_path in ('wm.read_homefile','wm.open_mainfile','wm.revert_mainfile','landfall.project_open'):
             res = fn(*args, **props)
         else:
-            with bpy.context.temp_override(**view3d_override()):
+            override = view3d_override()
+            if invoke and not bpy.app.background:
+                _bring_cursor_to_viewport(override, op_path)
+            with bpy.context.temp_override(**override):
                 res = fn(*args, **props)
         _feedback(op_path, "Cancelled" if "CANCELLED" in res else "Ready" if "RUNNING_MODAL" in res else "Done", "INFO")
         return res

@@ -354,7 +354,9 @@ class LANDFALL_STUDIO_OT_sculpt_pen(bpy.types.Operator):
                 self.report({'WARNING'},str(exc))
                 record('ERROR',error=str(exc))
             marquee=None
-            return {'FINISHED'}
+            # View navigation and the part picker change no data: finishing
+            # them would push an empty Undo step that the next Ctrl+Z wastes.
+            return {'CANCELLED'} if self.action in ('ORBIT','PAN','ZOOM') else {'FINISHED'}
         return {'RUNNING_MODAL'}
 
 
@@ -387,7 +389,9 @@ def _imm_modal(self,context,event,xy):
             if not result.get('ok'):self.report({'WARNING'},result.get('error','Insert failed'))
         except Exception as exc:
             self.report({'WARNING'},str(exc));record('ERROR',error=str(exc))
-        return {'FINISHED'}
+        # IMM_INSERT recorded its own Undo step; adding the gesture's would
+        # make the first Ctrl+Z appear to do nothing.
+        return {'CANCELLED'}
     return {'RUNNING_MODAL'}
 
 

@@ -851,6 +851,17 @@ class LANDFALL_STUDIO_OT_sculpt_command(bpy.types.Operator):
             return {'CANCELLED'}
 
 
+def _global_undo_push(message,anchor=None):
+    """Push a global (memfile) Undo step while Sculpt mode is active.
+
+    Undo picks its step type from the context object: with an Object-mode
+    object, or none at all, Blender records a global step instead of a Sculpt one.
+    """
+    with bpy.context.temp_override(active_object=anchor,object=anchor,
+                                   selected_objects=[anchor] if anchor else []):
+        bpy.ops.ed.undo_push(message=message)
+
+
 def run(command_id, **kw):
     # Qt slots call bpy operators from Python, whose default undo argument is
     # False. Explicitly record data commands through this existing undo owner.
@@ -860,6 +871,13 @@ def run(command_id, **kw):
         undoable=False  # return_to_maya owns the single native mode boundary.
     if command_id in ('MASK','GROUP','SCULPTRIS_PRO'):
         undoable=False  # Native Sculpt operators already push their own nodes.
+    # In Sculpt mode every Undo step is a Sculpt step, which stores mesh edits
+    # but not new objects; and Blender 5.2 does not reload global state when
+    # stepping from a global step back to a Sculpt one. So an insert is
+    # bracketed by two global steps: a checkpoint of the current work, then the
+    # insert. One Undo reloads the checkpoint (part gone, strokes kept).
+    adds_object=command_id=='IMM_INSERT' and bpy.context.mode=='SCULPT'
+    if adds_object:undoable=False
     with bpy.context.temp_override(**view_context()):
         instance_edit=command_id in ('PALETTE','PALETTE_OPTION') and kw.get('section') in ('ArrayMesh','NanoMesh') and kw.get('kind') not in ('EDIT_MESH','RETURN_PLACEMENT','EDIT_PLACEMENT','SPLIT_SCREEN','COPY','SAVE')
         if instance_edit and bpy.context.mode=='SCULPT':
@@ -868,7 +886,13 @@ def run(command_id, **kw):
             # global baseline before the modifier edit. Strokes keep their
             # existing Sculpt history; no parallel undo stack is introduced.
             bpy.ops.ed.undo_push(message='Sculpt modifier baseline')
+        if adds_object:_global_undo_push('Before Insert Mesh')
         bpy.ops.landfall_studio.sculpt_command('EXEC_DEFAULT',undoable,action=command_id,arguments=json.dumps(kw))
+        part=bpy.data.objects.get(last_result.get('subtool','')) if adds_object and last_result.get('ok') else None
+        if part is not None:
+            # The new part is in Object mode, so this records a global
+            # (memfile) step that one Undo can remove, strokes intact.
+            _global_undo_push('Insert Mesh',part)
     from ..ui.desktop import set_command_feedback
     set_command_feedback('Sculpt · '+command_id,str(last_result),'INFO' if last_result.get('ok') else 'ERROR')
     return dict(last_result)

@@ -182,6 +182,21 @@ class TestMayaMenusHeadless(unittest.TestCase):
         uv = self.obj.data.uv_layers.active.data
         self.assertTrue(all(-1e-4 <= c <= 1.0001 for loop in uv for c in loop.uv))
 
+    def test_in_window_menu_commands_start_in_the_viewport(self):
+        class Region: x, y, width, height = 100, 50, 800, 600
+        class Window:
+            warped = None
+            def cursor_warp(self, x, y): Window.warped = (x, y)
+        override = {"window": Window(), "region": Region()}
+        self.assertTrue(menus._bring_cursor_to_viewport(override, "ed.undo_history"))
+        self.assertEqual(Window.warped, (500, 350))
+        Window.warped = None
+        for path in ("import_scene.fbx", "wm.obj_export", "landfall.project_open", "landfall_studio.import_maya_ascii",
+                     "screen.userpref_show", "render.render"):
+            self.assertFalse(menus._bring_cursor_to_viewport(override, path), path)
+        self.assertIsNone(Window.warped)
+        self.assertFalse(menus._bring_cursor_to_viewport({}, "ed.undo_history"))
+
     def test_symmetrize_and_retopology_entries_exist(self):
         for title, label in (("Mesh", "Symmetrize"), ("Mesh", "Retopologize (QuadriFlow)"),
                              ("Edit Mesh", "Chamfer Vertex"), ("Mesh Tools", "Crease")):
